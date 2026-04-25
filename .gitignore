@@ -3,7 +3,6 @@ client/.next/
 client/out/
 client/build/
 client/coverage/
-client/.env*
 client/*.tsbuildinfo
 client/next-env.d.ts
 
@@ -11,7 +10,6 @@ server/node_modules/
 server/dist/
 server/build/
 server/coverage/
-server/.env*
 
 .DS_Store
 .codex
