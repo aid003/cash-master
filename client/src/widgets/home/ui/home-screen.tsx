@@ -2,18 +2,22 @@
 
 import { useEffect, useState } from "react";
 import {
+  Cable,
   CirclePlay,
   CircleStop,
   FolderSync,
   LogOut,
   Rocket,
+  Settings2,
   Shield,
+  X,
 } from "lucide-react";
 
 import {
   assignProfile,
   bootstrapAdmin,
   createProject,
+  getUndetectableConnectionSettings,
   getBootstrapStatus,
   getProject,
   listJobs,
@@ -22,17 +26,21 @@ import {
   login,
   logout,
   me,
+  saveUndetectableConnectionSettings,
   startProfile,
   startProjectProfiles,
   stopProfile,
   stopProjectProfiles,
   syncProfiles,
+  testUndetectableConnectionSettings,
   unassignProfile,
   updateProject,
   type AuthUser,
   type Job,
   type Profile,
   type Project,
+  type UndetectableConnectionSettings,
+  type UndetectableConnectionTestResult,
 } from "@/shared/api/cash-master";
 import { Button } from "@/shared/ui/button";
 
@@ -64,6 +72,8 @@ const toneByStatus: Record<string, string> = {
 function prettifyStatus(value: string) {
   return value.toLowerCase().replaceAll("_", " ");
 }
+
+const UNDETECTABLE_SETTINGS_DRAFT_KEY = "cash-master:undetectable-settings-draft";
 
 function Field({
   label,
@@ -119,10 +129,22 @@ export function HomeScreen() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [connectionSettings, setConnectionSettings] =
+    useState<UndetectableConnectionSettings | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [assignmentTargets, setAssignmentTargets] = useState<Record<string, string>>(
     {},
   );
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSubmitting, setSettingsSubmitting] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [settingsForm, setSettingsForm] = useState({
+    host: "127.0.0.1",
+    port: "25325",
+  });
+  const [settingsTestResult, setSettingsTestResult] =
+    useState<UndetectableConnectionTestResult | null>(null);
 
   const [projectForm, setProjectForm] = useState({
     name: "",
@@ -133,6 +155,40 @@ export function HomeScreen() {
 
   const selectedProject =
     projects.find((project) => project.id === selectedProjectId) ?? null;
+
+  function persistSettingsDraft(next: { host: string; port: string }) {
+    setSettingsForm(next);
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(UNDETECTABLE_SETTINGS_DRAFT_KEY, JSON.stringify(next));
+  }
+
+  function composeConnectionForm(
+    settings: UndetectableConnectionSettings,
+  ): { host: string; port: string } {
+    let draft: Partial<{ host: string; port: string }> = {};
+
+    if (typeof window !== "undefined") {
+      const rawDraft = window.localStorage.getItem(UNDETECTABLE_SETTINGS_DRAFT_KEY);
+      if (rawDraft) {
+        try {
+          draft = JSON.parse(rawDraft) as Partial<{ host: string; port: string }>;
+        } catch {
+          window.localStorage.removeItem(UNDETECTABLE_SETTINGS_DRAFT_KEY);
+        }
+      }
+    }
+
+    return {
+      host: typeof draft.host === "string" && draft.host.trim() ? draft.host : settings.host,
+      port:
+        typeof draft.port === "string" && draft.port.trim()
+          ? draft.port
+          : String(settings.port),
+    };
+  }
 
   function fillProjectForm(project: Project | null) {
     if (!project) {
@@ -159,14 +215,16 @@ export function HomeScreen() {
   }
 
   async function hydrate() {
-    const [projectsData, profilesData, jobsData] = await Promise.all([
+    const [projectsData, profilesData, jobsData, connectionSettingsData] = await Promise.all([
       listProjects(),
       listProfiles(),
       listJobs(),
+      getUndetectableConnectionSettings(),
     ]);
     setProjects(projectsData);
     setProfiles(profilesData);
     setJobs(jobsData);
+    setConnectionSettings(connectionSettingsData);
     const nextSelectedProject =
       projectsData.find((project) => project.id === selectedProjectId) ??
       projectsData[0] ??
@@ -191,14 +249,17 @@ export function HomeScreen() {
 
         if (currentUser.status === "fulfilled") {
           setUser(currentUser.value.user);
-          const [projectsData, profilesData, jobsData] = await Promise.all([
+          const [projectsData, profilesData, jobsData, connectionSettingsData] =
+            await Promise.all([
             listProjects(),
             listProfiles(),
             listJobs(),
+            getUndetectableConnectionSettings(),
           ]);
           setProjects(projectsData);
           setProfiles(profilesData);
           setJobs(jobsData);
+          setConnectionSettings(connectionSettingsData);
           const nextSelectedProject = projectsData[0] ?? null;
           setSelectedProjectId(nextSelectedProject?.id ?? null);
           fillProjectForm(nextSelectedProject);
@@ -241,6 +302,7 @@ export function HomeScreen() {
       setProjects([]);
       setProfiles([]);
       setJobs([]);
+      setConnectionSettings(null);
       setSelectedProjectId(null);
       setMessage(null);
       const bootstrapStatus = await getBootstrapStatus();
@@ -249,6 +311,80 @@ export function HomeScreen() {
       setMessage(error instanceof Error ? error.message : "Logout failed");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function openConnectionSettings() {
+    setSettingsOpen(true);
+    setSettingsLoading(true);
+    setSettingsMessage(null);
+    setSettingsTestResult(null);
+
+    try {
+      const settings = await getUndetectableConnectionSettings();
+      setConnectionSettings(settings);
+      setSettingsForm(composeConnectionForm(settings));
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof Error ? error.message : "Failed to load connection settings",
+      );
+    } finally {
+      setSettingsLoading(false);
+    }
+  }
+
+  function closeConnectionSettings() {
+    setSettingsOpen(false);
+    setSettingsLoading(false);
+    setSettingsSubmitting(false);
+    setSettingsMessage(null);
+    setSettingsTestResult(null);
+  }
+
+  async function handleTestConnection() {
+    setSettingsSubmitting(true);
+    setSettingsMessage(null);
+    setSettingsTestResult(null);
+
+    try {
+      const result = await testUndetectableConnectionSettings({
+        host: settingsForm.host.trim(),
+        port: Number(settingsForm.port),
+      });
+      setSettingsTestResult(result);
+      setSettingsMessage(
+        `Connected to ${result.host}:${result.port}, ${result.profileCount} profiles available.`,
+      );
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof Error ? error.message : "Connection test failed",
+      );
+    } finally {
+      setSettingsSubmitting(false);
+    }
+  }
+
+  async function handleSaveConnection() {
+    setSettingsSubmitting(true);
+    setSettingsMessage(null);
+    setSettingsTestResult(null);
+
+    try {
+      const saved = await saveUndetectableConnectionSettings({
+        host: settingsForm.host.trim(),
+        port: Number(settingsForm.port),
+      });
+      setConnectionSettings(saved);
+      setSettingsMessage(
+        `Connected to ${saved.host}:${saved.port}, ${saved.lastProfileCount ?? 0} profiles available.`,
+      );
+      await hydrate();
+    } catch (error) {
+      setSettingsMessage(
+        error instanceof Error ? error.message : "Failed to save connection settings",
+      );
+    } finally {
+      setSettingsSubmitting(false);
     }
   }
 
@@ -383,9 +519,25 @@ export function HomeScreen() {
               <p className="text-sm text-muted-foreground">
                 {user.email} · общий админ-контур для проектов, профилей и задач.
               </p>
+              {connectionSettings ? (
+                <p className="text-sm text-muted-foreground">
+                  Undetectable API: {connectionSettings.baseUrl} · source:{" "}
+                  {connectionSettings.source}
+                </p>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-3">
+              <Button
+                variant="outline"
+                size="lg"
+                className="h-11 rounded-2xl"
+                disabled={submitting}
+                onClick={() => void openConnectionSettings()}
+              >
+                <Settings2 className="size-4" />
+                Настройки Undetectable
+              </Button>
               <Button
                 variant="outline"
                 size="lg"
@@ -882,6 +1034,117 @@ export function HomeScreen() {
           </section>
         </div>
       </section>
+
+      {settingsOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-8 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[2rem] border border-border/70 bg-white p-6 shadow-[0_36px_120px_-48px_rgba(15,23,42,0.55)]">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-2">
+                <p className="text-xs uppercase tracking-[0.25em] text-primary">
+                  Connection Settings
+                </p>
+                <h2 className="text-2xl font-semibold text-foreground">
+                  Undetectable API endpoint
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Задайте активный `host + port` для backend и фоновых jobs.
+                </p>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-2xl"
+                onClick={() => closeConnectionSettings()}
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+
+            <div className="mt-6 grid gap-4 md:grid-cols-[1fr_180px]">
+              <Field label="Host">
+                <TextInput
+                  value={settingsForm.host}
+                  onChange={(event) =>
+                    persistSettingsDraft({
+                      ...settingsForm,
+                      host: event.target.value,
+                    })
+                  }
+                  placeholder="127.0.0.1"
+                  disabled={settingsLoading || settingsSubmitting}
+                />
+              </Field>
+              <Field label="Port">
+                <TextInput
+                  inputMode="numeric"
+                  value={settingsForm.port}
+                  onChange={(event) =>
+                    persistSettingsDraft({
+                      ...settingsForm,
+                      port: event.target.value,
+                    })
+                  }
+                  placeholder="25325"
+                  disabled={settingsLoading || settingsSubmitting}
+                />
+              </Field>
+            </div>
+
+            <div className="mt-5 rounded-[1.5rem] border border-border/70 bg-secondary/60 p-4 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 text-foreground">
+                <Cable className="size-4 text-primary" />
+                <span className="font-medium">
+                  Active endpoint: {connectionSettings?.baseUrl ?? "—"}
+                </span>
+              </div>
+              <p className="mt-2">
+                Источник: {connectionSettings?.source ?? "—"} · Последняя проверка:{" "}
+                {connectionSettings?.lastCheckedAt
+                  ? new Date(connectionSettings.lastCheckedAt).toLocaleString("ru-RU")
+                  : "—"}
+              </p>
+              <p className="mt-2">
+                Последний статус:{" "}
+                {connectionSettings?.lastCheckOk === null
+                  ? "not checked"
+                  : connectionSettings?.lastCheckOk
+                    ? `reachable${typeof connectionSettings?.lastProfileCount === "number" ? `, ${connectionSettings.lastProfileCount} profiles` : ""}`
+                    : connectionSettings?.lastCheckError ?? "unreachable"}
+              </p>
+              {settingsTestResult ? (
+                <p className="mt-2 text-emerald-700">
+                  Проверка: reachable, {settingsTestResult.profileCount} profiles found.
+                </p>
+              ) : null}
+            </div>
+
+            {settingsMessage ? (
+              <p className="mt-5 rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white">
+                {settingsMessage}
+              </p>
+            ) : null}
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <Button
+                variant="outline"
+                className="h-11 rounded-2xl"
+                disabled={settingsLoading || settingsSubmitting}
+                onClick={() => void handleTestConnection()}
+              >
+                Проверить
+              </Button>
+              <Button
+                className="h-11 rounded-2xl"
+                disabled={settingsLoading || settingsSubmitting}
+                onClick={() => void handleSaveConnection()}
+              >
+                Сохранить
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

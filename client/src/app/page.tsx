@@ -1,5 +1,5 @@
-import { HomeScreen } from "@/widgets/home/ui/home-screen";
+import { AuthScreen } from "@/features/session/ui/auth-screen";
 
 export default function HomePage() {
-  return <HomeScreen />;
+  return <AuthScreen />;
 }

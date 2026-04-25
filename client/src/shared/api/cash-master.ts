@@ -80,6 +80,22 @@ export type Job = {
   items: JobItem[];
 };
 
+export type UndetectableConnectionSettings = {
+  host: string;
+  port: number;
+  baseUrl: string;
+  source: "db" | "env";
+  lastCheckedAt: string | null;
+  lastCheckOk: boolean | null;
+  lastCheckError: string | null;
+  lastProfileCount: number | null;
+};
+
+export type UndetectableConnectionTestResult = UndetectableConnectionSettings & {
+  reachable: boolean;
+  profileCount: number;
+};
+
 type RequestOptions = RequestInit & {
   bodyJson?: unknown;
 };
@@ -186,6 +202,30 @@ export async function listProfiles() {
 export async function syncProfiles() {
   return request<Profile[]>("/profiles/revision", {
     method: "POST",
+  });
+}
+
+export async function getUndetectableConnectionSettings() {
+  return request<UndetectableConnectionSettings>("/profiles/connection-settings");
+}
+
+export async function testUndetectableConnectionSettings(payload: {
+  host: string;
+  port: number;
+}) {
+  return request<UndetectableConnectionTestResult>("/profiles/connection-settings/test", {
+    method: "POST",
+    bodyJson: payload,
+  });
+}
+
+export async function saveUndetectableConnectionSettings(payload: {
+  host: string;
+  port: number;
+}) {
+  return request<UndetectableConnectionSettings>("/profiles/connection-settings", {
+    method: "POST",
+    bodyJson: payload,
   });
 }
 

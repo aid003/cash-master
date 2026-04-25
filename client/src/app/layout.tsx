@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 
+import { SessionProvider } from "@/features/session/model/session-provider";
+import { TooltipProvider } from "@/shared/ui/tooltip";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,8 +16,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ru" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="ru" className="dark h-full antialiased">
+      <body className="min-h-full bg-background text-foreground">
+        <TooltipProvider>
+          <SessionProvider>{children}</SessionProvider>
+        </TooltipProvider>
+      </body>
     </html>
   );
 }

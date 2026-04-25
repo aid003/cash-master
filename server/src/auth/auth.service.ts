@@ -27,8 +27,10 @@ export class AuthService {
   ) {}
 
   async bootstrap(dto: BootstrapDto): Promise<SafeUser> {
-    const usersCount = await this.prisma.user.count();
-    if (usersCount > 0) {
+    const adminsCount = await this.prisma.user.count({
+      where: { role: UserRole.ADMIN },
+    });
+    if (adminsCount > 0) {
       throw new ConflictException('Bootstrap is available only before first user is created');
     }
 
@@ -44,8 +46,10 @@ export class AuthService {
   }
 
   async getBootstrapStatus(): Promise<{ needsBootstrap: boolean }> {
-    const usersCount = await this.prisma.user.count();
-    return { needsBootstrap: usersCount === 0 };
+    const adminsCount = await this.prisma.user.count({
+      where: { role: UserRole.ADMIN },
+    });
+    return { needsBootstrap: adminsCount === 0 };
   }
 
   async validateLogin(dto: LoginDto): Promise<SafeUser> {
