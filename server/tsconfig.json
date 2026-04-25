@@ -10,7 +10,15 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "ignoreDeprecations": "6.0",
-    "types": ["node"]
+    "types": ["node"],
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "strictPropertyInitialization": false,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "src/*": ["src/*"]
+    }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"]

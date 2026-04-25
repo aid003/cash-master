@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum ProfileLifecycleStatus {
+  AVAILABLE
+  STARTED
+  LOCKED
+  UNKNOWN
+  MISSING
+}
+
+enum JobType {
+  START_PROFILES
+  STOP_PROFILES
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIALLY_FAILED
+}
+
+enum JobItemStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(ADMIN)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  projects   Project[]
+  jobs       Job[]
+  jobUpdates JobItem[] @relation("JobItemUpdatedBy")
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String
+  status      ProjectStatus @default(ACTIVE)
+  notes       String        @default("")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  createdByUserId String?
+  createdByUser   User?                  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  profiles        UndetectableProfile[]
+  jobs            Job[]
+}
+
+model UndetectableProfile {
+  id            String                 @id @default(cuid())
+  profileId     String                 @unique
+  name          String
+  status        ProfileLifecycleStatus @default(UNKNOWN)
+  folder        String?
+  tags          String[]
+  debugPort     String?
+  websocketLink String?
+  lastSeenAt    DateTime?
+  isMissing     Boolean                @default(false)
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  jobItems JobItem[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  type        JobType
+  status      JobStatus @default(PENDING)
+  title       String
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  error       String?
+  summary     String?
+
+  projectId   String?
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  triggeredByUserId String?
+  triggeredByUser   User?      @relation(fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  items             JobItem[]
+
+  @@index([status])
+  @@index([projectId])
+}
+
+model JobItem {
+  id          String        @id @default(cuid())
+  status      JobItemStatus @default(PENDING)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  error       String?
+  payloadJson Json?
+  resultJson  Json?
+
+  jobId       String
+  job         Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  profileId   String
+  profile     UndetectableProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  updatedByUserId String?
+  updatedByUser   User?           @relation("JobItemUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([profileId])
+  @@index([status])
+}

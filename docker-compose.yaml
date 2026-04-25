@@ -1,0 +1,41 @@
+services:
+  cash-master-postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cash_master_user
+      POSTGRES_PASSWORD: cash_master_password
+      POSTGRES_DB: cash_master_db
+      PGDATA: /var/lib/postgresql/18/docker
+    ports:
+      - "5433:5432"
+    volumes:
+      - cash_master_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cash_master_user -d cash_master_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cash-master-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-cash_master_redis_password}
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - cash_master_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  cash_master_postgres_data:
+  cash_master_redis_data:
