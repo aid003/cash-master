@@ -77,7 +77,7 @@ export type AvitoActionResult = {
 export type RunnerExecutionResult = {
   outcomeCode: string;
   message: string;
-  runnerMode: 'stub';
+  runnerMode: 'stub' | 'undetectable';
   rawResult: unknown;
 };
 
