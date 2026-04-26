@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
@@ -9,6 +10,7 @@ import {
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
+import { ExecuteProjectActionDto } from './dto/execute-project-action.dto';
 import { JobsService } from './jobs.service';
 
 @UseGuards(JwtAuthGuard)
@@ -40,5 +42,30 @@ export class JobsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.jobsService.createProjectJob(projectId, 'stop', user.id);
+  }
+
+  @Post('projects/:projectId/withdraw')
+  withdrawProject(
+    @Param('projectId') projectId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createProjectJob(projectId, 'withdraw', user.id);
+  }
+
+  @Post('projects/:projectId/launch-ads')
+  launchAdsProject(
+    @Param('projectId') projectId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createProjectJob(projectId, 'launch_ads', user.id);
+  }
+
+  @Post('projects/:projectId/top-up-wallet')
+  topUpWalletProject(
+    @Param('projectId') projectId: string,
+    @Body() dto: ExecuteProjectActionDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createProjectJob(projectId, 'top_up_wallet', user.id, dto);
   }
 }

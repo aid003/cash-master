@@ -13,6 +13,8 @@ import {
   createProject,
   getProject,
   getUndetectableConnectionSettings,
+  launchAdsProfile,
+  launchAdsProjectProfiles,
   listJobs,
   listProfiles,
   listProjects,
@@ -23,8 +25,12 @@ import {
   stopProjectProfiles,
   syncProfiles,
   testUndetectableConnectionSettings,
+  topUpWalletProfile,
+  topUpWalletProjectProfiles,
   unassignProfile,
   updateProject,
+  withdrawProfile,
+  withdrawProjectProfiles,
   type Job,
   type Profile,
   type Project,
@@ -55,14 +61,29 @@ type CashMasterDataContextValue = {
     notes: string;
   }) => Promise<void>;
   refreshAll: () => Promise<void>;
-  saveConnectionSettingsAction: (payload: { host: string; port: number }) => Promise<void>;
+  saveConnectionSettingsAction: (payload: {
+    protocol: "http" | "https";
+    host: string;
+    port: number;
+  }) => Promise<void>;
   selectProject: (projectId: string | null) => void;
+  disableAdsProfileAction: (profileId: string, profileName: string) => Promise<void>;
+  launchAdsProfileAction: (profileId: string, profileName: string) => Promise<void>;
+  topUpWalletProfileAction: (
+    profileId: string,
+    profileName: string,
+    amount: number,
+  ) => Promise<void>;
   startProfileAction: (profileId: string, profileName: string) => Promise<void>;
+  disableAdsSelectedProjectAction: () => Promise<void>;
+  launchAdsSelectedProjectAction: () => Promise<void>;
+  topUpWalletSelectedProjectAction: (amount: number) => Promise<void>;
   startSelectedProjectProfilesAction: () => Promise<void>;
   stopProfileAction: (profileId: string, profileName: string) => Promise<void>;
   stopSelectedProjectProfilesAction: () => Promise<void>;
   syncProfilesAction: () => Promise<void>;
   testConnectionSettingsAction: (payload: {
+    protocol: "http" | "https";
     host: string;
     port: number;
   }) => Promise<UndetectableConnectionTestResult>;
@@ -195,10 +216,64 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
       }, "Настройки подключения сохранены");
     },
     selectProject: (projectId) => setSelectedProjectId(projectId),
+    disableAdsProfileAction: async (profileId, profileName) => {
+      await runAction(
+        () => withdrawProfile(profileId),
+        `Задача «Отключить рекламу» создана для ${profileName}`,
+        true,
+      );
+    },
+    launchAdsProfileAction: async (profileId, profileName) => {
+      await runAction(
+        () => launchAdsProfile(profileId),
+        `Задача «Запустить рекламу» создана для ${profileName}`,
+        true,
+      );
+    },
+    topUpWalletProfileAction: async (profileId, profileName, amount) => {
+      await runAction(
+        () => topUpWalletProfile(profileId, amount),
+        `Задача «Пополнить кошелек» создана для ${profileName}`,
+        true,
+      );
+    },
     startProfileAction: async (profileId, profileName) => {
       await runAction(
         () => startProfile(profileId),
         `Задача на запуск создана для ${profileName}`,
+        true,
+      );
+    },
+    disableAdsSelectedProjectAction: async () => {
+      if (!selectedProject) {
+        return;
+      }
+
+      await runAction(
+        () => withdrawProjectProfiles(selectedProject.id),
+        `Задача «Отключить рекламу» создана для проекта ${selectedProject.name}`,
+        true,
+      );
+    },
+    launchAdsSelectedProjectAction: async () => {
+      if (!selectedProject) {
+        return;
+      }
+
+      await runAction(
+        () => launchAdsProjectProfiles(selectedProject.id),
+        `Задача «Запустить рекламу» создана для проекта ${selectedProject.name}`,
+        true,
+      );
+    },
+    topUpWalletSelectedProjectAction: async (amount) => {
+      if (!selectedProject) {
+        return;
+      }
+
+      await runAction(
+        () => topUpWalletProjectProfiles(selectedProject.id, amount),
+        `Задача «Пополнить кошелек» создана для проекта ${selectedProject.name}`,
         true,
       );
     },

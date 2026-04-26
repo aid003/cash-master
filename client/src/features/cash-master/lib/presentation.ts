@@ -68,6 +68,25 @@ export function totalJobItems(job: Job) {
   return job.items.length;
 }
 
+export function summarizeJobProgress(job: Job) {
+  const completed = job.items.filter((item) => item.status === "COMPLETED").length;
+  const failed = job.items.filter((item) => item.status === "FAILED").length;
+  const skipped = job.items.filter((item) => item.status === "SKIPPED").length;
+  const total = job.items.length;
+
+  const parts = [`${completed} из ${total} выполнено`];
+
+  if (failed > 0) {
+    parts.push(`${failed} ошибка${failed > 1 ? "и" : ""}`);
+  }
+
+  if (skipped > 0) {
+    parts.push(`${skipped} пропущено`);
+  }
+
+  return parts.join(", ");
+}
+
 export function isProjectSelected(project: Project | null, selectedProjectId: string | null) {
   return Boolean(project && project.id === selectedProjectId);
 }

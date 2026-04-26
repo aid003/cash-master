@@ -1,15 +1,15 @@
 "use client";
 
 import {
-  CirclePlay,
-  CircleStop,
   FolderPlus,
+  Link2,
   MoreHorizontal,
   PencilLine,
   RefreshCw,
-  Rocket,
+  Search,
+  Unlink2,
 } from "lucide-react";
-import { useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 
 import {
   countAssignedProfiles,
@@ -19,6 +19,8 @@ import {
   prettifyStatus,
 } from "@/features/cash-master/lib/presentation";
 import { useCashMasterData } from "@/features/cash-master/model/cash-master-data-provider";
+import { BusinessActions } from "@/features/cash-master/ui/business-actions";
+import { TechnicalActionsMenu } from "@/features/cash-master/ui/technical-actions-menu";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -47,9 +49,7 @@ import { Field } from "@/shared/ui/field";
 import { Input } from "@/shared/ui/input";
 import { ScrollArea } from "@/shared/ui/scroll-area";
 import { Select } from "@/shared/ui/select";
-import { Separator } from "@/shared/ui/separator";
 import { Textarea } from "@/shared/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 
 type ProjectFormState = {
   name: string;
@@ -102,7 +102,7 @@ function ProjectFormFields({
           required
         />
       </Field>
-      <div className="grid grid-cols-[180px_1fr] gap-4">
+      <div className="grid gap-4 md:grid-cols-[180px_1fr]">
         <Field label="Статус">
           <Select
             value={form.status}
@@ -181,31 +181,14 @@ function ProjectDialog({
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string | number;
-  hint: string;
-}) {
-  return (
-    <Card className="bg-white/[0.03]">
-      <CardContent className="py-4">
-        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{label}</p>
-        <p className="mt-3 text-2xl font-semibold tracking-tight text-foreground">{value}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 export default function ProjectsPage() {
   const {
+    assignProfileAction,
     createProjectAction,
+    disableAdsSelectedProjectAction,
     isHydrating,
     isMutating,
+    launchAdsSelectedProjectAction,
     profiles,
     projects,
     refreshAll,
@@ -213,171 +196,142 @@ export default function ProjectsPage() {
     selectedProject,
     startSelectedProjectProfilesAction,
     stopSelectedProjectProfilesAction,
+    unassignProfileAction,
     updateSelectedProjectAction,
   } = useCashMasterData();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isProfilesOpen, setIsProfilesOpen] = useState(false);
   const [createForm, setCreateForm] = useState(emptyProjectForm);
   const [editForm, setEditForm] = useState(emptyProjectForm);
+  const [availableProfilesSearch, setAvailableProfilesSearch] = useState("");
+  const [profileToUnassign, setProfileToUnassign] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const deferredAvailableProfilesSearch = useDeferredValue(availableProfilesSearch);
 
-  const assignedProfilesCount = profiles.filter((profile) => profile.project).length;
+  const selectedProjectProfiles = useMemo(() => {
+    if (!selectedProject) {
+      return [];
+    }
+
+    return profiles
+      .filter((profile) => profile.project?.id === selectedProject.id)
+      .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  }, [profiles, selectedProject]);
+
+  const actionableProjectProfiles = useMemo(
+    () => selectedProjectProfiles.filter((profile) => !profile.isMissing),
+    [selectedProjectProfiles],
+  );
+
+  const availableProfiles = useMemo(() => {
+    const query = deferredAvailableProfilesSearch.trim().toLowerCase();
+    const candidates = profiles
+      .filter((profile) => !profile.project && !profile.isMissing)
+      .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+
+    if (!query) {
+      return candidates.slice(0, 8);
+    }
+
+    return candidates.filter((profile) =>
+      [profile.name, profile.profileId, profile.folder ?? "", profile.tags.join(" ")]
+        .join(" ")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [deferredAvailableProfilesSearch, profiles]);
+
+  const projectActionDisabled = isMutating || actionableProjectProfiles.length === 0;
 
   return (
     <>
-      <div className="grid gap-4">
-        <section className="grid grid-cols-4 gap-4">
-          <MetricCard
-            label="Проекты"
-            value={projects.length}
-            hint="Всего в рабочем столе"
-          />
-          <MetricCard
-            label="Профили"
-            value={assignedProfilesCount}
-            hint="Уже распределены по проектам"
-          />
-          <MetricCard
-            label="Выбран"
-            value={selectedProject?.name ?? "Не выбран"}
-            hint="Текущий активный контекст"
-          />
-          <Card className="bg-white/[0.03]">
-            <CardContent className="flex h-full items-center justify-between gap-3 py-4">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <Card className="min-h-[calc(100vh-2rem)]">
+          <CardHeader className="border-b border-white/6 pb-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                  Действия
-                </p>
-                <p className="mt-3 text-sm text-muted-foreground">
-                  Обновление данных и создание проекта
-                </p>
+                <CardTitle>Проекты</CardTitle>
+                <CardDescription>
+                  Список рабочих пространств и быстрый выбор активного проекта.
+                </CardDescription>
               </div>
-              <div className="flex gap-2">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        disabled={isHydrating || isMutating}
-                        onClick={() => void refreshAll()}
-                        aria-label="Обновить данные"
-                      />
-                    }
-                  >
-                    <RefreshCw className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipContent>Обновить данные</TooltipContent>
-                </Tooltip>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  disabled={isHydrating || isMutating}
+                  onClick={() => void refreshAll()}
+                >
+                  <RefreshCw className="size-4" />
+                  Обновить
+                </Button>
                 <Button onClick={() => setIsCreateOpen(true)}>
                   <FolderPlus className="size-4" />
                   Новый проект
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        </section>
+            </div>
+          </CardHeader>
 
-        <section className="grid grid-cols-[minmax(0,1fr)_360px] gap-4">
-          <Card className="min-h-[calc(100vh-244px)]">
-            <CardHeader className="flex-row items-center justify-between gap-4">
-              <div>
-                <CardTitle>Список проектов</CardTitle>
-                <CardDescription>
-                  Выберите проект, чтобы увидеть детали и быстрые действия.
-                </CardDescription>
-              </div>
-              <Badge variant="neutral">{projects.length} всего</Badge>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <ScrollArea className="h-[calc(100vh-340px)] pr-2">
-                <div className="grid gap-3">
-                  {projects.map((project) => {
-                    const isSelected = isProjectSelected(project, selectedProject?.id ?? null);
+          <CardContent className="grid gap-2 pt-4">
+            {projects.map((project) => {
+              const isSelected = isProjectSelected(project, selectedProject?.id ?? null);
+              const assignedProfiles = countAssignedProfiles(
+                project.id,
+                profiles,
+                project._count?.profiles,
+              );
 
-                    return (
-                      <div
-                        key={project.id}
-                        className={cn(
-                          "grid gap-3 rounded-[1.4rem] border px-4 py-4 transition",
-                          isSelected
-                            ? "border-white/10 bg-white/[0.06]"
-                            : "border-white/6 bg-white/[0.025] hover:border-white/8 hover:bg-white/[0.04]",
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <button
-                            type="button"
-                            onClick={() => selectProject(project.id)}
-                            className="min-w-0 flex-1 text-left"
-                          >
-                            <p className="truncate text-base font-semibold text-foreground">
-                              {project.name}
-                            </p>
-                            <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
-                              {project.description}
-                            </p>
-                          </button>
-
-                          <DropdownMenu>
-                            <DropdownMenuTrigger className="rounded-full border border-white/8 bg-white/[0.035] p-2 text-foreground/72 transition hover:bg-white/[0.06] hover:text-foreground">
-                              <MoreHorizontal className="size-4" />
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-44">
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  selectProject(project.id);
-                                  setEditForm(projectToForm(project));
-                                  setIsEditOpen(true);
-                                }}
-                              >
-                                <PencilLine className="size-4" />
-                                Редактировать
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  selectProject(project.id);
-                                  setIsEditOpen(false);
-                                }}
-                              >
-                                <Rocket className="size-4" />
-                                Открыть
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant={getStatusTone(project.status)}>
-                            {prettifyStatus(project.status)}
-                          </Badge>
-                          <Badge variant="neutral">
-                            {countAssignedProfiles(project.id, profiles, project._count?.profiles)} профилей
-                          </Badge>
-                          <Badge variant="neutral">{project._count?.jobs ?? 0} задач</Badge>
-                        </div>
-
-                        <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                          <span>Создан {formatDateTime(project.createdAt)}</span>
-                          <span>Обновлён {formatDateTime(project.updatedAt)}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {projects.length === 0 ? (
-                    <div className="rounded-[1.4rem] border border-dashed border-white/8 bg-white/[0.02] px-5 py-12 text-center text-sm text-muted-foreground">
-                      Проектов пока нет. Создайте первый проект через кнопку сверху.
+              return (
+                <button
+                  key={project.id}
+                  type="button"
+                  onClick={() => selectProject(project.id)}
+                  className={cn(
+                    "grid gap-3 rounded-[1.35rem] border px-4 py-4 text-left transition",
+                    isSelected
+                      ? "border-white/12 bg-white/[0.07]"
+                      : "border-white/6 bg-white/[0.02] hover:border-white/8 hover:bg-white/[0.04]",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-foreground">
+                        {project.name}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                        {project.description}
+                      </p>
                     </div>
-                  ) : null}
-                </div>
-              </ScrollArea>
-            </CardContent>
-          </Card>
+                    <Badge variant={getStatusTone(project.status)}>
+                      {prettifyStatus(project.status)}
+                    </Badge>
+                  </div>
 
-          <Card className="bg-white/[0.03]">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{assignedProfiles} профилей</span>
+                    <span>{project._count?.jobs ?? 0} задач</span>
+                    <span>Обновлен {formatDateTime(project.updatedAt)}</span>
+                  </div>
+                </button>
+              );
+            })}
+
+            {projects.length === 0 ? (
+              <div className="rounded-[1.4rem] border border-dashed border-white/8 bg-white/[0.02] px-5 py-12 text-center text-sm text-muted-foreground">
+                Проектов пока нет. Создайте первый проект через кнопку сверху.
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        <div className="xl:sticky xl:top-5 xl:self-start">
+          <Card>
             {selectedProject ? (
               <>
-                <CardHeader>
+                <CardHeader className="border-b border-white/6 pb-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <CardTitle>{selectedProject.name}</CardTitle>
@@ -385,97 +339,85 @@ export default function ProjectsPage() {
                         {selectedProject.description}
                       </CardDescription>
                     </div>
+
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="inline-flex size-10 items-center justify-center rounded-2xl border border-white/8 bg-white/[0.03] text-foreground/72 transition hover:bg-white/[0.05] hover:text-foreground">
+                        <MoreHorizontal className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-52 p-1.5">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            setEditForm(projectToForm(selectedProject));
+                            setIsEditOpen(true);
+                          }}
+                        >
+                          <PencilLine className="size-4" />
+                          Редактировать проект
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setIsProfilesOpen(true)}>
+                          <Link2 className="size-4" />
+                          Управлять профилями
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={isHydrating || isMutating}
+                          onClick={() => void refreshAll()}
+                        >
+                          <RefreshCw className="size-4" />
+                          Обновить данные
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="grid gap-3 py-5">
+                  <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                     <Badge variant={getStatusTone(selectedProject.status)}>
                       {prettifyStatus(selectedProject.status)}
                     </Badge>
+                    <span>{selectedProjectProfiles.length} профилей</span>
+                    <span>{actionableProjectProfiles.length} доступны</span>
                   </div>
-                </CardHeader>
-                <CardContent className="grid gap-5">
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button disabled={isMutating} onClick={() => void startSelectedProjectProfilesAction()}>
-                      <CirclePlay className="size-4" />
-                      Старт
-                    </Button>
+                  <BusinessActions
+                    showTopUpWallet={false}
+                    disabled={projectActionDisabled}
+                    onDisableAds={() => void disableAdsSelectedProjectAction()}
+                    onLaunchAds={() => void launchAdsSelectedProjectAction()}
+                    onTopUpWallet={() => undefined}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
                     <Button
                       variant="outline"
-                      disabled={isMutating}
-                      onClick={() => void stopSelectedProjectProfilesAction()}
+                      className="h-12 text-[0.95rem]"
+                      onClick={() => setIsProfilesOpen(true)}
                     >
-                      <CircleStop className="size-4" />
-                      Стоп
+                      Профили
                     </Button>
+                    <TechnicalActionsMenu
+                      disabled={projectActionDisabled}
+                      onStart={() => void startSelectedProjectProfilesAction()}
+                      onStop={() => void stopSelectedProjectProfilesAction()}
+                    />
                   </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setEditForm(projectToForm(selectedProject));
-                        setIsEditOpen(true);
-                      }}
-                    >
-                      <PencilLine className="size-4" />
-                      Редактировать
-                    </Button>
-                    <Button
-                      variant="outline"
-                      disabled={isHydrating || isMutating}
-                      onClick={() => void refreshAll()}
-                    >
-                      <Rocket className="size-4" />
-                      Обновить
-                    </Button>
-                  </div>
-
-                  <Separator />
-
-                  <div className="grid gap-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <Card className="bg-white/[0.03] p-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                          Профили
-                        </p>
-                        <p className="mt-2 text-xl font-semibold text-foreground">
-                          {countAssignedProfiles(
-                            selectedProject.id,
-                            profiles,
-                            selectedProject._count?.profiles,
-                          )}
-                        </p>
-                      </Card>
-                      <Card className="bg-white/[0.03] p-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                          Задачи
-                        </p>
-                        <p className="mt-2 text-xl font-semibold text-foreground">
-                          {selectedProject._count?.jobs ?? 0}
-                        </p>
-                      </Card>
-                    </div>
-
-                    <div className="rounded-[1.4rem] border border-white/8 bg-white/[0.025] px-4 py-4">
-                      <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                        Заметки
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-foreground/84">
-                        {selectedProject.notes || "Пока без заметок."}
-                      </p>
-                    </div>
-
-                    <div className="rounded-[1.4rem] border border-white/8 bg-white/[0.025] px-4 py-4 text-sm text-muted-foreground">
-                      <p>Создан: {formatDateTime(selectedProject.createdAt)}</p>
-                      <p className="mt-2">Обновлён: {formatDateTime(selectedProject.updatedAt)}</p>
-                    </div>
+                  <div className="grid gap-1 text-sm text-muted-foreground">
+                    <p>{selectedProject.notes ? selectedProject.notes : "Пока без заметок."}</p>
+                    <p>
+                      {actionableProjectProfiles.length > 0
+                        ? `К действиям готовы ${actionableProjectProfiles.length} профилей`
+                        : "Нет доступных профилей для действий"}
+                    </p>
+                    <p>Создан: {formatDateTime(selectedProject.createdAt)}</p>
+                    <p>Обновлен: {formatDateTime(selectedProject.updatedAt)}</p>
                   </div>
                 </CardContent>
               </>
             ) : (
-              <CardContent className="flex h-full min-h-[360px] items-center justify-center text-center text-sm text-muted-foreground">
+              <CardContent className="flex min-h-[360px] items-center justify-center text-center text-sm text-muted-foreground">
                 Выберите проект слева, чтобы открыть сводку и действия.
               </CardContent>
             )}
           </Card>
-        </section>
+        </div>
       </div>
 
       <ProjectDialog
@@ -487,7 +429,7 @@ export default function ProjectsPage() {
           }
         }}
         title="Новый проект"
-        description="Минимальная форма создания без постоянной боковой панели."
+        description="Создайте рабочее пространство, в котором будут собраны профили и массовые действия."
         form={createForm}
         onChange={setCreateForm}
         isBusy={isMutating}
@@ -503,7 +445,7 @@ export default function ProjectsPage() {
         open={isEditOpen}
         onOpenChange={setIsEditOpen}
         title="Редактирование проекта"
-        description="Обновление названия, статуса и кратких заметок."
+        description="Обновите название, статус и заметки без выхода из рабочей панели."
         form={editForm}
         onChange={setEditForm}
         isBusy={isMutating || !selectedProject}
@@ -513,6 +455,179 @@ export default function ProjectsPage() {
           setIsEditOpen(false);
         }}
       />
+
+      <Dialog open={isProfilesOpen} onOpenChange={setIsProfilesOpen}>
+        <DialogContent className="max-h-[calc(100vh-4rem)] sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              Профили проекта {selectedProject ? `«${selectedProject.name}»` : ""}
+            </DialogTitle>
+            <DialogDescription>
+              Управляйте составом проекта отдельно от action center, чтобы не терять фокус на рабочих операциях.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-5">
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                  Привязанные
+                </p>
+                <Badge variant="neutral">{selectedProjectProfiles.length}</Badge>
+              </div>
+
+              {selectedProjectProfiles.length > 0 ? (
+                <ScrollArea className="max-h-72 pr-2">
+                  <div className="grid gap-2">
+                    {selectedProjectProfiles.map((profile) => (
+                      <div
+                        key={profile.id}
+                        className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-[1.1rem] border border-white/8 bg-white/[0.03] px-3 py-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {profile.name}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <span className="truncate font-mono">{profile.profileId}</span>
+                            <span>•</span>
+                            <span>{prettifyStatus(profile.status)}</span>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={isMutating}
+                          onClick={() =>
+                            setProfileToUnassign({
+                              id: profile.id,
+                              name: profile.name,
+                            })
+                          }
+                          aria-label={`Отвязать профиль ${profile.name}`}
+                        >
+                          <Unlink2 className="size-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              ) : (
+                <div className="rounded-[1.1rem] border border-dashed border-white/8 bg-white/[0.02] px-4 py-5 text-sm text-muted-foreground">
+                  В этом проекте пока нет привязанных профилей.
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-2">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+                Добавить профиль
+              </p>
+              <div className="flex h-10 items-center rounded-2xl border border-white/8 bg-white/[0.035] pl-4 transition focus-within:border-primary/40 focus-within:bg-white/[0.05] focus-within:ring-2 focus-within:ring-primary/15">
+                <Search className="pointer-events-none size-4 shrink-0 text-muted-foreground" />
+                <input
+                  value={availableProfilesSearch}
+                  onChange={(event) => setAvailableProfilesSearch(event.target.value)}
+                  className="h-full w-full bg-transparent px-3 pr-4 text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
+                  placeholder="Поиск свободных профилей"
+                />
+              </div>
+
+              {availableProfiles.length > 0 ? (
+                <ScrollArea className="max-h-80 pr-2">
+                  <div className="grid gap-2">
+                    {availableProfiles.map((profile) => (
+                      <div
+                        key={profile.id}
+                        className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-[1.1rem] border border-white/8 bg-white/[0.03] px-3 py-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {profile.name}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                            <span className="truncate font-mono">{profile.profileId}</span>
+                            <span>•</span>
+                            <span>{prettifyStatus(profile.status)}</span>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isMutating || !selectedProject}
+                          onClick={() =>
+                            selectedProject
+                              ? void assignProfileAction(
+                                  profile.id,
+                                  selectedProject.id,
+                                  profile.name,
+                                )
+                              : undefined
+                          }
+                        >
+                          <Link2 className="size-4" />
+                          Добавить
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              ) : (
+                <div className="rounded-[1.1rem] border border-dashed border-white/8 bg-white/[0.02] px-4 py-5 text-sm text-muted-foreground">
+                  {deferredAvailableProfilesSearch.trim()
+                    ? "По вашему запросу свободные профили не найдены."
+                    : "Свободных профилей для привязки сейчас нет."}
+                </div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(profileToUnassign)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProfileToUnassign(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Отвязать профиль?</DialogTitle>
+            <DialogDescription>
+              {profileToUnassign && selectedProject
+                ? `Профиль ${profileToUnassign.name} будет удален из проекта ${selectedProject.name}.`
+                : "Подтвердите отвязку профиля от проекта."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="mt-1">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setProfileToUnassign(null)}
+              disabled={isMutating}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isMutating || !profileToUnassign}
+              onClick={async () => {
+                if (!profileToUnassign) {
+                  return;
+                }
+
+                await unassignProfileAction(profileToUnassign.id, profileToUnassign.name);
+                setProfileToUnassign(null);
+              }}
+            >
+              Отвязать
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

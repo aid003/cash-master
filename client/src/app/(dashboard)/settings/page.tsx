@@ -24,6 +24,7 @@ function SettingsForm() {
     saveConnectionSettingsAction,
     testConnectionSettingsAction,
   } = useCashMasterData();
+  const [protocol, setProtocol] = useState(connectionSettings?.protocol ?? "http");
   const [host, setHost] = useState(connectionSettings?.host ?? "127.0.0.1");
   const [port, setPort] = useState(String(connectionSettings?.port ?? 25325));
   const [testMessage, setTestMessage] = useState<string | null>(null);
@@ -43,7 +44,18 @@ function SettingsForm() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div className="grid grid-cols-[1fr_180px] gap-4">
+          <div className="grid grid-cols-[140px_1fr_180px] gap-4">
+            <Field label="Protocol">
+              <select
+                value={protocol}
+                onChange={(event) => setProtocol(event.target.value as "http" | "https")}
+                disabled={isMutating || isTesting}
+                className="flex h-10 w-full rounded-2xl border border-white/8 bg-white/[0.035] px-4 text-sm uppercase text-foreground outline-none transition focus:border-primary/40 focus:bg-white/[0.05] focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="http">HTTP</option>
+                <option value="https">HTTPS</option>
+              </select>
+            </Field>
             <Field label="Host">
               <Input
                 value={host}
@@ -69,12 +81,13 @@ function SettingsForm() {
                 setIsTesting(true);
                 setTestMessage(null);
                 void testConnectionSettingsAction({
+                  protocol,
                   host: host.trim(),
                   port: Number(port),
                 })
                   .then((result) => {
                     setTestMessage(
-                      `Соединение с ${result.host}:${result.port} установлено, доступно профилей: ${result.profileCount}.`,
+                      `Соединение с ${result.baseUrl} установлено, доступно профилей: ${result.profileCount}.`,
                     );
                   })
                   .catch((error: unknown) => {
@@ -92,6 +105,7 @@ function SettingsForm() {
               disabled={isMutating || isTesting}
               onClick={() =>
                 void saveConnectionSettingsAction({
+                  protocol,
                   host: host.trim(),
                   port: Number(port),
                 })
@@ -151,7 +165,7 @@ export default function SettingsPage() {
 
   return (
     <SettingsForm
-      key={`${connectionSettings?.host ?? "127.0.0.1"}:${connectionSettings?.port ?? 25325}`}
+      key={`${connectionSettings?.protocol ?? "http"}:${connectionSettings?.host ?? "127.0.0.1"}:${connectionSettings?.port ?? 25325}`}
     />
   );
 }

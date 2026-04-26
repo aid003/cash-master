@@ -140,6 +140,7 @@ export function HomeScreen() {
   const [settingsSubmitting, setSettingsSubmitting] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [settingsForm, setSettingsForm] = useState({
+    protocol: "http" as "http" | "https",
     host: "127.0.0.1",
     port: "25325",
   });
@@ -156,7 +157,11 @@ export function HomeScreen() {
   const selectedProject =
     projects.find((project) => project.id === selectedProjectId) ?? null;
 
-  function persistSettingsDraft(next: { host: string; port: string }) {
+  function persistSettingsDraft(next: {
+    protocol: "http" | "https";
+    host: string;
+    port: string;
+  }) {
     setSettingsForm(next);
     if (typeof window === "undefined") {
       return;
@@ -167,8 +172,8 @@ export function HomeScreen() {
 
   function composeConnectionForm(
     settings: UndetectableConnectionSettings,
-  ): { host: string; port: string } {
-    let draft: Partial<{ host: string; port: string }> = {};
+  ): { protocol: "http" | "https"; host: string; port: string } {
+    let draft: Partial<{ protocol: "http" | "https"; host: string; port: string }> = {};
 
     if (typeof window !== "undefined") {
       const rawDraft = window.localStorage.getItem(UNDETECTABLE_SETTINGS_DRAFT_KEY);
@@ -182,6 +187,7 @@ export function HomeScreen() {
     }
 
     return {
+      protocol: draft.protocol === "https" ? "https" : settings.protocol,
       host: typeof draft.host === "string" && draft.host.trim() ? draft.host : settings.host,
       port:
         typeof draft.port === "string" && draft.port.trim()
@@ -348,12 +354,13 @@ export function HomeScreen() {
 
     try {
       const result = await testUndetectableConnectionSettings({
+        protocol: settingsForm.protocol,
         host: settingsForm.host.trim(),
         port: Number(settingsForm.port),
       });
       setSettingsTestResult(result);
       setSettingsMessage(
-        `Connected to ${result.host}:${result.port}, ${result.profileCount} profiles available.`,
+        `Connected to ${result.baseUrl}, ${result.profileCount} profiles available.`,
       );
     } catch (error) {
       setSettingsMessage(
@@ -371,12 +378,13 @@ export function HomeScreen() {
 
     try {
       const saved = await saveUndetectableConnectionSettings({
+        protocol: settingsForm.protocol,
         host: settingsForm.host.trim(),
         port: Number(settingsForm.port),
       });
       setConnectionSettings(saved);
       setSettingsMessage(
-        `Connected to ${saved.host}:${saved.port}, ${saved.lastProfileCount ?? 0} profiles available.`,
+        `Connected to ${saved.baseUrl}, ${saved.lastProfileCount ?? 0} profiles available.`,
       );
       await hydrate();
     } catch (error) {
@@ -1061,7 +1069,23 @@ export function HomeScreen() {
               </Button>
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-[1fr_180px]">
+            <div className="mt-6 grid gap-4 md:grid-cols-[140px_1fr_180px]">
+              <Field label="Protocol">
+                <select
+                  value={settingsForm.protocol}
+                  onChange={(event) =>
+                    persistSettingsDraft({
+                      ...settingsForm,
+                      protocol: event.target.value as "http" | "https",
+                    })
+                  }
+                  disabled={settingsLoading || settingsSubmitting}
+                  className="flex h-11 w-full rounded-[1.25rem] border border-border/70 bg-white px-4 text-sm uppercase text-foreground outline-none transition focus:border-primary/40 focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                </select>
+              </Field>
               <Field label="Host">
                 <TextInput
                   value={settingsForm.host}

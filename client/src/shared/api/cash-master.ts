@@ -61,7 +61,7 @@ export type JobItem = {
 
 export type Job = {
   id: string;
-  type: "START_PROFILES" | "STOP_PROFILES";
+  type: "START_PROFILES" | "STOP_PROFILES" | "PROFILE_ACTIONS";
   title: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "PARTIALLY_FAILED";
   summary: string | null;
@@ -81,6 +81,7 @@ export type Job = {
 };
 
 export type UndetectableConnectionSettings = {
+  protocol: "http" | "https";
   host: string;
   port: number;
   baseUrl: string;
@@ -210,6 +211,7 @@ export async function getUndetectableConnectionSettings() {
 }
 
 export async function testUndetectableConnectionSettings(payload: {
+  protocol: "http" | "https";
   host: string;
   port: number;
 }) {
@@ -220,6 +222,7 @@ export async function testUndetectableConnectionSettings(payload: {
 }
 
 export async function saveUndetectableConnectionSettings(payload: {
+  protocol: "http" | "https";
   host: string;
   port: number;
 }) {
@@ -254,6 +257,25 @@ export async function stopProfile(profileRecordId: string) {
   });
 }
 
+export async function withdrawProfile(profileRecordId: string) {
+  return request<Job>(`/profiles/${profileRecordId}/withdraw`, {
+    method: "POST",
+  });
+}
+
+export async function launchAdsProfile(profileRecordId: string) {
+  return request<Job>(`/profiles/${profileRecordId}/launch-ads`, {
+    method: "POST",
+  });
+}
+
+export async function topUpWalletProfile(profileRecordId: string, amount: number) {
+  return request<Job>(`/profiles/${profileRecordId}/top-up-wallet`, {
+    method: "POST",
+    bodyJson: { amount },
+  });
+}
+
 export async function listJobs() {
   return request<Job[]>("/jobs");
 }
@@ -267,5 +289,24 @@ export async function startProjectProfiles(projectId: string) {
 export async function stopProjectProfiles(projectId: string) {
   return request<Job>(`/jobs/projects/${projectId}/stop`, {
     method: "POST",
+  });
+}
+
+export async function withdrawProjectProfiles(projectId: string) {
+  return request<Job>(`/jobs/projects/${projectId}/withdraw`, {
+    method: "POST",
+  });
+}
+
+export async function launchAdsProjectProfiles(projectId: string) {
+  return request<Job>(`/jobs/projects/${projectId}/launch-ads`, {
+    method: "POST",
+  });
+}
+
+export async function topUpWalletProjectProfiles(projectId: string, amount: number) {
+  return request<Job>(`/jobs/projects/${projectId}/top-up-wallet`, {
+    method: "POST",
+    bodyJson: { amount },
   });
 }

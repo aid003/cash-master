@@ -18,8 +18,14 @@ import { PrismaService } from '../database/prisma.service';
 import { ProfilesService } from '../profiles/profiles.service';
 import { ProjectsService } from '../projects/projects.service';
 import { PROFILE_OPERATIONS_QUEUE } from './jobs.constants';
+import {
+  type AvitoActionPayload,
+  type ProfileActionType,
+} from './profile-actions.types';
 
-type ProfileAction = 'start' | 'stop';
+type CreateActionOptions = {
+  amount?: number;
+};
 
 @Injectable()
 export class JobsService {
@@ -83,26 +89,31 @@ export class JobsService {
 
   async createSingleProfileJob(
     profileRecordId: string,
-    action: ProfileAction,
+    action: ProfileActionType,
     userId: string,
+    options: CreateActionOptions = {},
   ) {
     const profile = await this.profilesService.getProfileOrThrow(profileRecordId);
+    this.validateActionInput(action, options);
 
     return this.createJobForProfiles({
-      title: `${action === 'start' ? 'Start' : 'Stop'} profile ${profile.name}`,
+      title: `${this.getActionVerb(action)} profile ${profile.name}`,
       action,
       profileRecordIds: [profileRecordId],
       projectId: profile.projectId ?? undefined,
       userId,
+      options,
     });
   }
 
   async createProjectJob(
     projectId: string,
-    action: ProfileAction,
+    action: ProfileActionType,
     userId: string,
+    options: CreateActionOptions = {},
   ) {
     const project = await this.projectsService.ensureExists(projectId);
+    this.validateActionInput(action, options);
     const profiles = await this.prisma.undetectableProfile.findMany({
       where: {
         projectId,
@@ -116,11 +127,12 @@ export class JobsService {
     }
 
     return this.createJobForProfiles({
-      title: `${action === 'start' ? 'Start' : 'Stop'} profiles for ${project.name}`,
+      title: `${this.getActionVerb(action)} profiles for ${project.name}`,
       action,
       profileRecordIds: profiles.map((profile: UndetectableProfile) => profile.id),
       projectId,
       userId,
+      options,
     });
   }
 
@@ -168,12 +180,21 @@ export class JobsService {
   }
 
   async markItemFailed(jobItemId: string, error: string) {
+    return this.markItemFailedWithResult(jobItemId, error);
+  }
+
+  async markItemFailedWithResult(
+    jobItemId: string,
+    error: string,
+    resultJson?: Prisma.InputJsonValue,
+  ) {
     const item = await this.prisma.jobItem.update({
       where: { id: jobItemId },
       data: {
         status: JobItemStatus.FAILED,
         finishedAt: new Date(),
         error,
+        ...(resultJson !== undefined ? { resultJson } : {}),
       },
     });
 
@@ -227,32 +248,38 @@ export class JobsService {
 
   private async createJobForProfiles(input: {
     title: string;
-    action: ProfileAction;
+    action: ProfileActionType;
     profileRecordIds: string[];
     projectId?: string;
     userId: string;
+    options?: CreateActionOptions;
   }) {
     await this.ensureNoActiveConflicts(input.profileRecordIds);
-
-    const type =
-      input.action === 'start' ? JobType.START_PROFILES : JobType.STOP_PROFILES;
 
     const created = await this.prisma.job.create({
       data: {
         title: input.title,
-        type,
+        type: JobType.PROFILE_ACTIONS,
         status: JobStatus.PENDING,
         projectId: input.projectId,
         triggeredByUserId: input.userId,
         items: {
-          create: input.profileRecordIds.map((profileRecordId) => ({
-            profileId: profileRecordId,
-            status: JobItemStatus.PENDING,
-            payloadJson: {
+          create: input.profileRecordIds.map((profileRecordId) => {
+            const payload = this.buildActionPayload({
               action: input.action,
-            } as Prisma.InputJsonValue,
-            updatedByUserId: input.userId,
-          })),
+              profileRecordId,
+              projectId: input.projectId ?? null,
+              requestedByUserId: input.userId,
+              options: input.options,
+            });
+
+            return {
+              profileId: profileRecordId,
+              status: JobItemStatus.PENDING,
+              payloadJson: payload as Prisma.InputJsonValue,
+              updatedByUserId: input.userId,
+            };
+          }),
         },
       },
       include: {
@@ -307,6 +334,56 @@ export class JobsService {
       throw new ConflictException(
         `Profile "${firstConflict.profile.name}" is already used by active job "${firstConflict.job.title}"`,
       );
+    }
+  }
+
+  private validateActionInput(action: ProfileActionType, options: CreateActionOptions) {
+    if (action === 'top_up_wallet' && !(typeof options.amount === 'number' && options.amount > 0)) {
+      throw new ConflictException('Top up wallet amount must be a positive number');
+    }
+  }
+
+  private buildActionPayload(input: {
+    action: ProfileActionType;
+    profileRecordId: string;
+    projectId: string | null;
+    requestedByUserId: string;
+    options?: CreateActionOptions;
+  }): AvitoActionPayload {
+    const basePayload = {
+      requestedByUserId: input.requestedByUserId,
+      requestedAt: new Date().toISOString(),
+      projectId: input.projectId,
+      profileRecordId: input.profileRecordId,
+    };
+
+    if (input.action === 'top_up_wallet') {
+      return {
+        ...basePayload,
+        action: 'top_up_wallet',
+        amount: input.options?.amount ?? 0,
+        currency: 'RUB',
+      };
+    }
+
+    return {
+      ...basePayload,
+      action: input.action,
+    };
+  }
+
+  private getActionVerb(action: ProfileActionType) {
+    switch (action) {
+      case 'start':
+        return 'Start';
+      case 'stop':
+        return 'Stop';
+      case 'withdraw':
+        return 'Withdraw';
+      case 'launch_ads':
+        return 'Launch ads';
+      case 'top_up_wallet':
+        return 'Top up wallet';
     }
   }
 }

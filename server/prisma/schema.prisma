@@ -27,6 +27,7 @@ enum ProfileLifecycleStatus {
 enum JobType {
   START_PROFILES
   STOP_PROFILES
+  PROFILE_ACTIONS
 }
 
 enum JobStatus {
@@ -60,6 +61,7 @@ model User {
 
 model AppConfig {
   id                          Int      @id
+  undetectableApiProtocol     String?
   undetectableApiHost         String?
   undetectableApiPort         Int?
   undetectableLastCheckedAt   DateTime?

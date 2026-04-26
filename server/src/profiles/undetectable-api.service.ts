@@ -32,6 +32,7 @@ type StartProfileResponse = {
 };
 
 type UndetectableConnection = {
+  protocol: 'http' | 'https';
   host: string;
   port: number;
   baseUrl: string;
@@ -43,6 +44,7 @@ type UndetectableConnection = {
 };
 
 type ConnectionInput = {
+  protocol: 'http' | 'https';
   host: string;
   port: number;
 };
@@ -77,7 +79,7 @@ export class UndetectableApiService {
   }
 
   async testConnection(input: ConnectionInput) {
-    const connection = this.createConnection(input.host, input.port, 'db', null);
+    const connection = this.createConnection(input.protocol, input.host, input.port, 'db', null);
     await this.requestToConnection<Record<string, never>>('/status', connection, false);
     const profiles = await this.requestToConnection<Record<string, RemoteProfile>>(
       '/list',
@@ -98,6 +100,7 @@ export class UndetectableApiService {
     await this.prisma.appConfig.upsert({
       where: { id: APP_CONFIG_ID },
       update: {
+        undetectableApiProtocol: result.protocol,
         undetectableApiHost: result.host,
         undetectableApiPort: result.port,
         undetectableLastCheckedAt: new Date(),
@@ -107,6 +110,7 @@ export class UndetectableApiService {
       },
       create: {
         id: APP_CONFIG_ID,
+        undetectableApiProtocol: result.protocol,
         undetectableApiHost: result.host,
         undetectableApiPort: result.port,
         undetectableLastCheckedAt: new Date(),
@@ -138,7 +142,7 @@ export class UndetectableApiService {
       }
 
       throw new ServiceUnavailableException(
-        `Undetectable API is unavailable at ${connection.baseUrl}${path}: ${this.formatFetchError(error)}. Open Undetectable settings and verify host/port.`,
+        `Undetectable API is unavailable at ${connection.baseUrl}${path}: ${this.formatFetchError(error)}. Open Undetectable settings and verify protocol/host/port.`,
       );
     }
 
@@ -153,7 +157,7 @@ export class UndetectableApiService {
       }
 
       throw new BadGatewayException(
-        `Undetectable API request failed at ${connection.baseUrl}${path} with ${response.status}. Open Undetectable settings and verify host/port.`,
+        `Undetectable API request failed at ${connection.baseUrl}${path} with ${response.status}. Open Undetectable settings and verify protocol/host/port.`,
       );
     }
 
@@ -172,7 +176,7 @@ export class UndetectableApiService {
       }
 
       throw new BadGatewayException(
-        `Undetectable API error at ${connection.baseUrl}${path}: ${message}. Open Undetectable settings and verify host/port.`,
+        `Undetectable API error at ${connection.baseUrl}${path}: ${message}. Open Undetectable settings and verify protocol/host/port.`,
       );
     }
 
@@ -196,6 +200,7 @@ export class UndetectableApiService {
 
     if (appConfig?.undetectableApiHost && appConfig.undetectableApiPort) {
       return this.createConnection(
+        appConfig.undetectableApiProtocol === 'https' ? 'https' : 'http',
         appConfig.undetectableApiHost,
         appConfig.undetectableApiPort,
         'db',
@@ -209,19 +214,27 @@ export class UndetectableApiService {
     );
 
     const parsed = new URL(fallbackUrl);
-    return this.createConnection(parsed.hostname, Number(parsed.port || 80), 'env', appConfig);
+    return this.createConnection(
+      parsed.protocol === 'https:' ? 'https' : 'http',
+      parsed.hostname,
+      Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
+      'env',
+      appConfig,
+    );
   }
 
   private createConnection(
+    protocol: 'http' | 'https',
     host: string,
     port: number,
     source: 'db' | 'env',
     appConfig: AppConfig | null,
   ): UndetectableConnection {
     return {
+      protocol,
       host: host.trim(),
       port,
-      baseUrl: `http://${host.trim()}:${port}`,
+      baseUrl: `${protocol}://${host.trim()}:${port}`,
       source,
       lastCheckedAt: appConfig?.undetectableLastCheckedAt?.toISOString() ?? null,
       lastCheckOk: appConfig?.undetectableLastCheckOk ?? null,
@@ -239,6 +252,7 @@ export class UndetectableApiService {
     await this.prisma.appConfig.upsert({
       where: { id: APP_CONFIG_ID },
       update: {
+        undetectableApiProtocol: connection.protocol,
         undetectableApiHost: connection.host,
         undetectableApiPort: connection.port,
         undetectableLastCheckedAt: new Date(),
@@ -248,6 +262,7 @@ export class UndetectableApiService {
       },
       create: {
         id: APP_CONFIG_ID,
+        undetectableApiProtocol: connection.protocol,
         undetectableApiHost: connection.host,
         undetectableApiPort: connection.port,
         undetectableLastCheckedAt: new Date(),

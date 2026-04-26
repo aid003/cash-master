@@ -1,7 +1,11 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsString, Max, Min } from 'class-validator';
 
 export class UndetectableConnectionSettingsDto {
+  @IsString()
+  @IsIn(['http', 'https'])
+  protocol!: 'http' | 'https';
+
   @IsString()
   host!: string;
 

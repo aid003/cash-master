@@ -10,6 +10,7 @@ import {
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
+import { ExecuteProfileActionDto } from '../jobs/dto/execute-profile-action.dto';
 import { JobsService } from '../jobs/jobs.service';
 import { AssignProfileDto } from './dto/assign-profile.dto';
 import { UndetectableConnectionSettingsDto } from './dto/undetectable-connection-settings.dto';
@@ -77,5 +78,35 @@ export class ProfilesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.jobsService.createSingleProfileJob(profileRecordId, 'stop', user.id);
+  }
+
+  @Post(':profileRecordId/withdraw')
+  withdraw(
+    @Param('profileRecordId') profileRecordId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createSingleProfileJob(profileRecordId, 'withdraw', user.id);
+  }
+
+  @Post(':profileRecordId/launch-ads')
+  launchAds(
+    @Param('profileRecordId') profileRecordId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createSingleProfileJob(profileRecordId, 'launch_ads', user.id);
+  }
+
+  @Post(':profileRecordId/top-up-wallet')
+  topUpWallet(
+    @Param('profileRecordId') profileRecordId: string,
+    @Body() dto: ExecuteProfileActionDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createSingleProfileJob(
+      profileRecordId,
+      'top_up_wallet',
+      user.id,
+      dto,
+    );
   }
 }
