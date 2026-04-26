@@ -27,7 +27,6 @@ function SettingsForm() {
   const [protocol, setProtocol] = useState(connectionSettings?.protocol ?? "http");
   const [host, setHost] = useState(connectionSettings?.host ?? "127.0.0.1");
   const [port, setPort] = useState(String(connectionSettings?.port ?? 25325));
-  const [testMessage, setTestMessage] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
   return (
@@ -79,22 +78,11 @@ function SettingsForm() {
               disabled={isMutating || isTesting}
               onClick={() => {
                 setIsTesting(true);
-                setTestMessage(null);
                 void testConnectionSettingsAction({
                   protocol,
                   host: host.trim(),
                   port: Number(port),
                 })
-                  .then((result) => {
-                    setTestMessage(
-                      `Соединение с ${result.baseUrl} установлено, доступно профилей: ${result.profileCount}.`,
-                    );
-                  })
-                  .catch((error: unknown) => {
-                    setTestMessage(
-                      error instanceof Error ? error.message : "Проверка соединения завершилась ошибкой",
-                    );
-                  })
                   .finally(() => setIsTesting(false));
               }}
             >
@@ -115,12 +103,6 @@ function SettingsForm() {
               Сохранить
             </Button>
           </div>
-
-          {testMessage ? (
-            <div className="rounded-[1.2rem] border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
-              {testMessage}
-            </div>
-          ) : null}
         </CardContent>
       </Card>
 

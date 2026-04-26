@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { toast } from "sonner";
 
 import {
   assignProfile,
@@ -37,23 +38,17 @@ import {
   type UndetectableConnectionSettings,
   type UndetectableConnectionTestResult,
 } from "@/shared/api/cash-master";
+import { runToastAction } from "@/shared/lib/notifications";
 import { useAppUiStore } from "@/shared/store/app-ui-store";
-
-type Feedback = {
-  tone: "info" | "success" | "danger";
-  text: string;
-} | null;
 
 type CashMasterDataContextValue = {
   connectionSettings: UndetectableConnectionSettings | null;
-  feedback: Feedback;
   isHydrating: boolean;
   isMutating: boolean;
   jobs: Job[];
   profiles: Profile[];
   projects: Project[];
   selectedProject: Project | null;
-  clearFeedback: () => void;
   createProjectAction: (payload: {
     name: string;
     description: string;
@@ -111,7 +106,6 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
     useState<UndetectableConnectionSettings | null>(null);
   const [isHydrating, setIsHydrating] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
-  const [feedback, setFeedback] = useState<Feedback>(null);
 
   const selectedProjectId = useAppUiStore((state) => state.selectedProjectId);
   const setSelectedProjectId = useAppUiStore((state) => state.setSelectedProjectId);
@@ -119,7 +113,7 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
   const selectedProject =
     projects.find((project) => project.id === selectedProjectId) ?? projects[0] ?? null;
 
-  async function refreshAll() {
+  async function refreshDashboardData() {
     setIsHydrating(true);
 
     try {
@@ -141,11 +135,6 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
         projectsData[0]?.id ??
         null;
       setSelectedProjectId(nextSelectedProjectId);
-    } catch (error) {
-      setFeedback({
-        tone: "danger",
-        text: error instanceof Error ? error.message : "Не удалось загрузить данные панели",
-      });
     } finally {
       setIsHydrating(false);
     }
@@ -153,38 +142,57 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refreshAll();
+    void refreshDashboardData().catch((error: unknown) => {
+      toast.error(
+        error instanceof Error ? error.message : "Не удалось загрузить данные панели",
+      );
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function runAction(
-    action: () => Promise<unknown>,
+  async function refreshSelectedProjectDetails() {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    const freshProject = await getProject(selectedProjectId).catch(() => null);
+    if (freshProject) {
+      setProjects((current) =>
+        current.map((project) => (project.id === freshProject.id ? freshProject : project)),
+      );
+    }
+  }
+
+  async function runAction<T>(
+    action: () => Promise<T>,
+    loadingMessage: string,
     successMessage: string,
-    shouldRefreshSelectedProject = false,
+    options: {
+      refreshAfter?: boolean;
+      shouldRefreshSelectedProject?: boolean;
+      onSuccess?: (result: T) => Promise<void> | void;
+    } = {},
   ) {
     setIsMutating(true);
-    setFeedback(null);
 
     try {
-      await action();
-      await refreshAll();
+      await runToastAction({
+        action: async () => {
+          const result = await action();
 
-      if (shouldRefreshSelectedProject && selectedProjectId) {
-        const freshProject = await getProject(selectedProjectId).catch(() => null);
-        if (freshProject) {
-          setProjects((current) =>
-            current.map((project) =>
-              project.id === freshProject.id ? freshProject : project,
-            ),
-          );
-        }
-      }
+          if (options.refreshAfter ?? true) {
+            await refreshDashboardData();
+          }
 
-      setFeedback({ tone: "success", text: successMessage });
-    } catch (error) {
-      setFeedback({
-        tone: "danger",
-        text: error instanceof Error ? error.message : "Операция завершилась с ошибкой",
+          if (options.shouldRefreshSelectedProject) {
+            await refreshSelectedProjectDetails();
+          }
+
+          return result;
+        },
+        loadingMessage,
+        successMessage,
+        onSuccess: options.onSuccess,
       });
     } finally {
       setIsMutating(false);
@@ -193,55 +201,68 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
   const value: CashMasterDataContextValue = {
     connectionSettings,
-    feedback,
     isHydrating,
     isMutating,
     jobs,
     profiles,
     projects,
     selectedProject,
-    clearFeedback: () => setFeedback(null),
     createProjectAction: async (payload) => {
-      await runAction(() => createProject(payload), "Проект создан");
+      await runAction(
+        () => createProject(payload),
+        "Создаю проект...",
+        "Проект создан",
+      );
     },
     refreshAll: async () => {
-      setFeedback({ tone: "info", text: "Обновляю данные..." });
-      await refreshAll();
-      setFeedback({ tone: "success", text: "Данные обновлены" });
+      await runToastAction({
+        action: refreshDashboardData,
+        loadingMessage: "Обновляю данные...",
+        successMessage: "Данные обновлены",
+      });
     },
     saveConnectionSettingsAction: async (payload) => {
-      await runAction(async () => {
-        const saved = await saveUndetectableConnectionSettings(payload);
-        setConnectionSettings(saved);
-      }, "Настройки подключения сохранены");
+      await runAction<UndetectableConnectionSettings>(
+        () => saveUndetectableConnectionSettings(payload),
+        "Сохраняю настройки подключения...",
+        "Настройки подключения сохранены",
+        {
+          refreshAfter: false,
+          onSuccess: (saved) => setConnectionSettings(saved),
+        },
+      );
     },
     selectProject: (projectId) => setSelectedProjectId(projectId),
     disableAdsProfileAction: async (profileId, profileName) => {
       await runAction(
         () => withdrawProfile(profileId),
+        `Создаю задачу «Отключить рекламу» для ${profileName}...`,
         `Задача «Отключить рекламу» создана для ${profileName}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     launchAdsProfileAction: async (profileId, profileName) => {
       await runAction(
         () => launchAdsProfile(profileId),
+        `Создаю задачу «Запустить рекламу» для ${profileName}...`,
         `Задача «Запустить рекламу» создана для ${profileName}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     topUpWalletProfileAction: async (profileId, profileName, amount) => {
       await runAction(
         () => topUpWalletProfile(profileId, amount),
+        `Создаю задачу «Пополнить кошелек» для ${profileName}...`,
         `Задача «Пополнить кошелек» создана для ${profileName}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     startProfileAction: async (profileId, profileName) => {
       await runAction(
         () => startProfile(profileId),
+        `Создаю задачу на запуск для ${profileName}...`,
         `Задача на запуск создана для ${profileName}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     disableAdsSelectedProjectAction: async () => {
@@ -251,8 +272,9 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
       await runAction(
         () => withdrawProjectProfiles(selectedProject.id),
+        `Создаю задачу «Отключить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Отключить рекламу» создана для проекта ${selectedProject.name}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     launchAdsSelectedProjectAction: async () => {
@@ -262,8 +284,9 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
       await runAction(
         () => launchAdsProjectProfiles(selectedProject.id),
+        `Создаю задачу «Запустить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Запустить рекламу» создана для проекта ${selectedProject.name}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     topUpWalletSelectedProjectAction: async (amount) => {
@@ -273,8 +296,9 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
       await runAction(
         () => topUpWalletProjectProfiles(selectedProject.id, amount),
+        `Создаю задачу «Пополнить кошелек» для проекта ${selectedProject.name}...`,
         `Задача «Пополнить кошелек» создана для проекта ${selectedProject.name}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     startSelectedProjectProfilesAction: async () => {
@@ -284,15 +308,17 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
       await runAction(
         () => startProjectProfiles(selectedProject.id),
+        `Создаю задачу на запуск проекта ${selectedProject.name}...`,
         `Задача на запуск проекта ${selectedProject.name} создана`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     stopProfileAction: async (profileId, profileName) => {
       await runAction(
         () => stopProfile(profileId),
+        `Создаю задачу на остановку для ${profileName}...`,
         `Задача на остановку создана для ${profileName}`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     stopSelectedProjectProfilesAction: async () => {
@@ -302,28 +328,40 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
       await runAction(
         () => stopProjectProfiles(selectedProject.id),
+        `Создаю задачу на остановку проекта ${selectedProject.name}...`,
         `Задача на остановку проекта ${selectedProject.name} создана`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     syncProfilesAction: async () => {
-      await runAction(() => syncProfiles(), "Синхронизация профилей завершена");
+      await runAction(
+        () => syncProfiles(),
+        "Подтягиваю профили из Detect...",
+        "Синхронизация профилей завершена",
+      );
     },
     testConnectionSettingsAction: async (payload) => {
-      return testUndetectableConnectionSettings(payload);
+      return runToastAction({
+        action: () => testUndetectableConnectionSettings(payload),
+        loadingMessage: "Проверяю подключение к Undetectable API...",
+        successMessage: (result) =>
+          `Соединение с ${result.baseUrl} установлено, доступно профилей: ${result.profileCount}.`,
+      });
     },
     assignProfileAction: async (profileRecordId, projectId, profileName) => {
       await runAction(
         () => assignProfile(profileRecordId, projectId),
+        `Привязываю профиль ${profileName}...`,
         `Профиль ${profileName} привязан`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     unassignProfileAction: async (profileRecordId, profileName) => {
       await runAction(
         () => unassignProfile(profileRecordId),
+        `Отвязываю профиль ${profileName}...`,
         `Профиль ${profileName} отвязан`,
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
     updateSelectedProjectAction: async (payload) => {
@@ -333,8 +371,9 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
 
       await runAction(
         () => updateProject(selectedProject.id, payload),
+        "Сохраняю проект...",
         "Проект обновлён",
-        true,
+        { shouldRefreshSelectedProject: true },
       );
     },
   };

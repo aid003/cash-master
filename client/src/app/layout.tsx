@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { SessionProvider } from "@/features/session/model/session-provider";
+import { Toaster } from "@/shared/ui/sonner";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 
 import "./globals.css";
@@ -19,7 +20,17 @@ export default function RootLayout({
     <html lang="ru" className="dark h-full antialiased">
       <body className="min-h-full bg-background text-foreground">
         <TooltipProvider>
-          <SessionProvider>{children}</SessionProvider>
+          <SessionProvider>
+            {children}
+            <Toaster
+              position="top-right"
+              expand
+              visibleToasts={6}
+              toastOptions={{
+                duration: 4200,
+              }}
+            />
+          </SessionProvider>
         </TooltipProvider>
       </body>
     </html>

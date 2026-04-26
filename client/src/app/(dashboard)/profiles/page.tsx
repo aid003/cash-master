@@ -3,6 +3,7 @@
 import {
   ChevronDown,
   Link2,
+  RefreshCw,
   Search,
   Unlink2,
 } from "lucide-react";
@@ -33,10 +34,12 @@ export default function ProfilesPage() {
   const {
     assignProfileAction,
     disableAdsProfileAction,
+    isHydrating,
     isMutating,
     launchAdsProfileAction,
     profiles,
     projects,
+    syncProfilesAction,
     selectedProject,
     startProfileAction,
     stopProfileAction,
@@ -104,6 +107,15 @@ export default function ProfilesPage() {
                     {selectedProject?.name ?? "Не выбран"}
                   </p>
                 </div>
+                <Button
+                  variant="outline"
+                  disabled={isHydrating || isMutating}
+                  className="h-10 w-full"
+                  onClick={() => void syncProfilesAction()}
+                >
+                  <RefreshCw className="size-4" />
+                  Подтянуть профили
+                </Button>
               </div>
             </div>
           </CardHeader>
