@@ -1,9 +1,9 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsPositive } from 'class-validator';
+import { IsInt, IsPositive } from 'class-validator';
 
 export class TopUpWalletDto {
   @Type(() => Number)
-  @IsNumber()
+  @IsInt()
   @IsPositive()
   amount!: number;
 }

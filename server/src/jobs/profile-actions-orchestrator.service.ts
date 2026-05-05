@@ -1,10 +1,12 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ProfileLifecycleStatus, type Prisma } from '@prisma/client';
 import puppeteer from 'puppeteer';
+import { inspect } from 'node:util';
 
 import { PrismaService } from '../database/prisma.service';
 import { ProfilesService } from '../profiles/profiles.service';
@@ -23,6 +25,8 @@ import {
 export class ProfileActionsOrchestratorService {
   private static readonly PROFILE_READY_TIMEOUT_MS = 45_000;
   private static readonly PROFILE_READY_POLL_MS = 1_500;
+  private static readonly AVITO_HEADLESS_CHROME_FLAGS = '--headless=new';
+  private readonly logger = new Logger(ProfileActionsOrchestratorService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -43,13 +47,59 @@ export class ProfileActionsOrchestratorService {
 
     try {
       if (this.shouldAutoStart(context)) {
-        steps.push(this.createStep('auto_start_requested', 'Starting profile before Avito action'));
-        await this.undetectableApiService.startProfile(context.profile.profileId);
+        steps.push(
+          this.createStep(
+            'auto_start_requested',
+            'Starting profile in headless mode before Avito action',
+          ),
+        );
+        const startResult = await this.undetectableApiService.startProfile(context.profile.profileId, {
+          chromeFlags: ProfileActionsOrchestratorService.AVITO_HEADLESS_CHROME_FLAGS,
+        });
+        this.logger.log({
+          message: 'Undetectable profile start returned',
+          correlationId: context.correlationId,
+          profileRecordId: context.profile.id,
+          profileId: context.profile.profileId,
+          startResult,
+          chromeFlags: ProfileActionsOrchestratorService.AVITO_HEADLESS_CHROME_FLAGS,
+        });
         startedByOrchestrator = true;
-        await this.profilesService.refreshRuntimeSnapshot(context.profile.id);
+        await this.persistStartProfileResult(context.profile.id, startResult);
+        steps.push(
+          this.createStep(
+            'auto_start_response_received',
+            `Start response debug_port=${startResult.debug_port || 'empty'} websocket_link=${startResult.websocket_link ? 'present' : 'empty'}`,
+          ),
+        );
+        if (startResult.debug_port) {
+          const debugProbe = await this.probeDebugPortEndpoint(
+            context.runtimeSnapshot.browserHost,
+            startResult.debug_port,
+          );
+          this.logger.log({
+            message: 'Debug port probe after start completed',
+            correlationId: context.correlationId,
+            profileRecordId: context.profile.id,
+            profileId: context.profile.profileId,
+            debugPort: startResult.debug_port,
+            probe: debugProbe,
+          });
+          steps.push(
+            this.createStep(
+              'auto_start_debug_port_probed',
+              `Debug port ${startResult.debug_port} probe ok=${debugProbe.ok} websocket=${debugProbe.webSocketDebuggerUrl ? 'present' : 'empty'} status=${debugProbe.httpStatus}`,
+            ),
+          );
+        }
         context = await this.buildContext(jobItemId, payload);
         this.validateContext(context);
-        steps.push(this.createStep('auto_start_completed', 'Profile started successfully'));
+        steps.push(
+          this.createStep(
+            'auto_start_completed',
+            `Profile start returned debug_port=${startResult.debug_port || 'empty'} websocket_link=${startResult.websocket_link ? 'present' : 'empty'} chrome_flags=${ProfileActionsOrchestratorService.AVITO_HEADLESS_CHROME_FLAGS}`,
+          ),
+        );
       } else {
         steps.push(this.createStep('existing_session_reused', 'Using existing browser session'));
       }
@@ -150,6 +200,7 @@ export class ProfileActionsOrchestratorService {
     jobItemId: string,
     payload: AvitoActionPayload,
   ): Promise<ActionExecutionContext> {
+    const connection = await this.undetectableApiService.getConnectionSettings();
     const item = await this.prisma.jobItem.findUnique({
       where: { id: jobItemId },
       include: {
@@ -190,8 +241,9 @@ export class ProfileActionsOrchestratorService {
       profile: item.profile,
       runtimeSnapshot: {
         status: item.profile.status,
+        browserHost: connection.host,
         debugPort: item.profile.debugPort,
-        websocketLink: item.profile.websocketLink,
+        websocketLink: this.normalizeWebsocketLink(item.profile.websocketLink, connection.host),
         isMissing: item.profile.isMissing,
         lastSeenAt: item.profile.lastSeenAt?.toISOString() ?? null,
       },
@@ -229,14 +281,19 @@ export class ProfileActionsOrchestratorService {
       );
     }
 
-    if (context.action.action === 'top_up_wallet' && !(context.action.amount > 0)) {
+    if (
+      (context.action.action === 'top_up_wallet' ||
+        context.action.action === 'disable_ads' ||
+        context.action.action === 'withdraw') &&
+      !(Number.isInteger(context.action.amount) && context.action.amount > 0)
+    ) {
       throw new ActionExecutionError(
-        'Top up amount must be a positive number',
+        'Action amount must be a positive integer',
         this.buildFailureResult(
           context.action.action,
           new Date(),
-          'Top up amount must be a positive number',
-          'INVALID_TOP_UP_AMOUNT',
+          'Action amount must be a positive integer',
+          'INVALID_ACTION_AMOUNT',
           { amount: context.action.amount },
         ),
       );
@@ -256,42 +313,97 @@ export class ProfileActionsOrchestratorService {
     let lastReason = 'Browser websocket is not available yet';
 
     while (Date.now() - startedAt < ProfileActionsOrchestratorService.PROFILE_READY_TIMEOUT_MS) {
-      await this.profilesService.refreshRuntimeSnapshot(context.profile.id);
       const freshContext = await this.buildContext(context.jobItem.id, context.action);
 
-      if (
-        freshContext.runtimeSnapshot.status !== ProfileLifecycleStatus.STARTED ||
-        !freshContext.runtimeSnapshot.websocketLink
-      ) {
-        lastReason = `Profile state is ${freshContext.runtimeSnapshot.status}, websocket pending`;
-        await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
-        continue;
-      }
-
-      let browser: Awaited<ReturnType<typeof puppeteer.connect>> | null = null;
-      try {
-        browser = await puppeteer.connect({
-          browserWSEndpoint: freshContext.runtimeSnapshot.websocketLink,
-          defaultViewport: null,
-        });
-
-        const pages = await browser.pages();
-        const page = pages[0] ?? (await browser.newPage());
-        const readyState = await page.evaluate(() => document.readyState);
-
-        return {
-          pageCount: pages.length || 1,
-          activePageUrl: page.url() || 'about:blank',
-          readyState,
-        };
-      } catch (error) {
-        lastReason = error instanceof Error ? error.message : 'Unknown browser readiness error';
-        await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
-      } finally {
-        if (browser) {
-          await browser.disconnect();
+      if (freshContext.runtimeSnapshot.websocketLink) {
+        try {
+          return await this.checkBrowserConnection(freshContext);
+        } catch (error) {
+          lastReason = error instanceof Error ? error.message : 'Unknown browser readiness error';
+          this.logger.warn({
+            message: 'Browser websocket exists but is not ready yet',
+            correlationId: context.correlationId,
+            profileRecordId: context.profile.id,
+            profileId: context.profile.profileId,
+            status: freshContext.runtimeSnapshot.status,
+            websocketLinkPresent: true,
+            reason: lastReason,
+          });
+          await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
+          continue;
         }
       }
+
+      if (freshContext.runtimeSnapshot.debugPort) {
+        try {
+          const debugProbe = await this.probeDebugPortEndpoint(
+            freshContext.runtimeSnapshot.browserHost,
+            freshContext.runtimeSnapshot.debugPort,
+          );
+          const websocketLink = debugProbe.webSocketDebuggerUrl;
+          if (websocketLink) {
+            await this.prisma.undetectableProfile.update({
+              where: { id: context.profile.id },
+              data: {
+                status: ProfileLifecycleStatus.STARTED,
+                websocketLink,
+                lastSeenAt: new Date(),
+                isMissing: false,
+              },
+            });
+
+            this.logger.log({
+              message: 'Resolved websocket from debug port',
+              correlationId: context.correlationId,
+              profileRecordId: context.profile.id,
+              profileId: context.profile.profileId,
+              debugPort: freshContext.runtimeSnapshot.debugPort,
+              probe: debugProbe,
+            });
+            await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
+            continue;
+          }
+
+          lastReason = `Debug port ${freshContext.runtimeSnapshot.debugPort} is reachable but webSocketDebuggerUrl is empty`;
+          this.logger.warn({
+            message: 'Debug port responded without webSocketDebuggerUrl',
+            correlationId: context.correlationId,
+            profileRecordId: context.profile.id,
+            profileId: context.profile.profileId,
+            debugPort: freshContext.runtimeSnapshot.debugPort,
+            probe: debugProbe,
+            reason: lastReason,
+          });
+        } catch (error) {
+          lastReason =
+            error instanceof Error ? error.message : 'Failed to resolve websocket from debug port';
+          this.logger.warn({
+            message: 'Debug port is present but websocket endpoint is unresolved',
+            correlationId: context.correlationId,
+            profileRecordId: context.profile.id,
+            profileId: context.profile.profileId,
+            debugPort: freshContext.runtimeSnapshot.debugPort,
+            reason: lastReason,
+          });
+        }
+      }
+
+      const refreshed = await this.profilesService.refreshRuntimeSnapshot(context.profile.id);
+      if (!refreshed.websocketLink) {
+        lastReason = `Profile state is ${refreshed.status}, websocket pending`;
+        this.logger.warn({
+          message: 'Browser websocket is still pending',
+          correlationId: context.correlationId,
+          profileRecordId: context.profile.id,
+          profileId: context.profile.profileId,
+          status: refreshed.status,
+          debugPort: refreshed.debugPort,
+          websocketLinkPresent: false,
+          reason: lastReason,
+        });
+      }
+
+      await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
     }
 
     throw new ActionExecutionError(
@@ -310,6 +422,73 @@ export class ProfileActionsOrchestratorService {
         },
       ),
     );
+  }
+
+  private async persistStartProfileResult(
+    profileRecordId: string,
+    startResult: {
+      name?: string;
+      websocket_link?: string;
+      debug_port?: string;
+      folder?: string;
+      tags?: string[];
+    },
+  ) {
+    if (!startResult.websocket_link && !startResult.debug_port) {
+      await this.profilesService.refreshRuntimeSnapshot(profileRecordId);
+      return;
+    }
+
+    await this.prisma.undetectableProfile.update({
+      where: { id: profileRecordId },
+      data: {
+        name: startResult.name?.trim() || undefined,
+        status: ProfileLifecycleStatus.STARTED,
+        folder: startResult.folder?.trim() || undefined,
+        tags: startResult.tags ?? undefined,
+        debugPort: startResult.debug_port || null,
+        websocketLink: this.normalizeWebsocketLink(
+          startResult.websocket_link || null,
+          await this.undetectableApiService.getBrowserHost(),
+        ),
+        lastSeenAt: new Date(),
+        isMissing: false,
+      },
+    });
+  }
+
+  private async checkBrowserConnection(context: ActionExecutionContext) {
+    if (!context.runtimeSnapshot.websocketLink && !context.runtimeSnapshot.debugPort) {
+      throw new Error(
+        `Profile state is ${context.runtimeSnapshot.status}, websocket/debug port pending`,
+      );
+    }
+
+    let browser: Awaited<ReturnType<typeof puppeteer.connect>> | null = null;
+    try {
+      browser = await this.connectToProfileBrowser(context);
+
+      const pages = await browser.pages();
+      const page = pages[0] ?? (await browser.newPage());
+      const readyState = await page.evaluate(() => document.readyState);
+
+      return {
+        pageCount: pages.length || 1,
+        activePageUrl: page.url() || 'about:blank',
+        readyState,
+      };
+    } catch (error) {
+      throw new Error(this.formatUnknownError(error));
+    } finally {
+      if (browser) {
+        await browser.disconnect();
+      }
+    }
+  }
+
+  private async resolveWebsocketFromDebugPort(browserHost: string, debugPort: string) {
+    const probe = await this.probeDebugPortEndpoint(browserHost, debugPort);
+    return probe.webSocketDebuggerUrl;
   }
 
   private buildFailureResult(
@@ -366,5 +545,97 @@ export class ProfileActionsOrchestratorService {
 
   private sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private formatUnknownError(error: unknown) {
+    if (error instanceof Error) {
+      return `${error.name}: ${error.message}`;
+    }
+
+    if (typeof error === 'string' || typeof error === 'number' || typeof error === 'boolean') {
+      return String(error);
+    }
+
+    try {
+      return inspect(error, { depth: 4, breakLength: 120 });
+    } catch {
+      return 'Unknown browser readiness error';
+    }
+  }
+
+  private async connectToProfileBrowser(context: ActionExecutionContext) {
+    if (context.runtimeSnapshot.debugPort) {
+      return puppeteer.connect({
+        browserURL: `http://${context.runtimeSnapshot.browserHost}:${context.runtimeSnapshot.debugPort}`,
+        defaultViewport: null,
+      });
+    }
+
+    if (context.runtimeSnapshot.websocketLink) {
+      return puppeteer.connect({
+        browserWSEndpoint: context.runtimeSnapshot.websocketLink,
+        defaultViewport: null,
+      });
+    }
+
+    throw new Error(
+      `Profile state is ${context.runtimeSnapshot.status}, websocket/debug port pending`,
+    );
+  }
+
+  private async probeDebugPortEndpoint(browserHost: string, debugPort: string) {
+    let response: Response;
+    try {
+      response = await fetch(`http://${browserHost}:${debugPort}/json/version`);
+    } catch (error) {
+      throw new Error(
+        `Debug port ${browserHost}:${debugPort} fetch failed: ${this.formatUnknownError(error)}`,
+      );
+    }
+
+    const rawText = await response.text();
+    let body: unknown = null;
+    if (rawText) {
+      try {
+        body = JSON.parse(rawText);
+      } catch {
+        body = rawText;
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `Debug port ${browserHost}:${debugPort} responded with HTTP ${response.status}: ${typeof body === 'string' ? body : inspect(body, { depth: 3, breakLength: 120 })}`,
+      );
+    }
+
+    const payload =
+      body && typeof body === 'object'
+        ? (body as { webSocketDebuggerUrl?: unknown })
+        : null;
+
+    return {
+      ok: response.ok,
+      httpStatus: response.status,
+      body,
+      webSocketDebuggerUrl:
+        payload && typeof payload.webSocketDebuggerUrl === 'string'
+          ? this.normalizeWebsocketLink(payload.webSocketDebuggerUrl, browserHost)
+          : null,
+    };
+  }
+
+  private normalizeWebsocketLink(websocketLink: string | null, browserHost: string) {
+    if (!websocketLink) {
+      return null;
+    }
+
+    try {
+      const parsed = new URL(websocketLink);
+      parsed.hostname = browserHost;
+      return parsed.toString();
+    } catch {
+      return websocketLink;
+    }
   }
 }

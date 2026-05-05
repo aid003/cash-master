@@ -49,6 +49,10 @@ type ConnectionInput = {
   port: number;
 };
 
+type StartProfileOptions = {
+  chromeFlags?: string;
+};
+
 const APP_CONFIG_ID = 1;
 
 @Injectable()
@@ -66,8 +70,19 @@ export class UndetectableApiService {
     return this.request<Record<string, RemoteProfile>>('/list');
   }
 
-  async startProfile(profileId: string): Promise<StartProfileResponse> {
-    return this.request<StartProfileResponse>(`/profile/start/${profileId}`);
+  async startProfile(
+    profileId: string,
+    options: StartProfileOptions = {},
+  ): Promise<StartProfileResponse> {
+    const params = new URLSearchParams();
+    if (options.chromeFlags) {
+      params.set('chrome_flags', options.chromeFlags);
+    }
+
+    const query = params.toString();
+    return this.request<StartProfileResponse>(
+      `/profile/start/${profileId}${query ? `?${query}` : ''}`,
+    );
   }
 
   async stopProfile(profileId: string): Promise<Record<string, never>> {
@@ -76,6 +91,11 @@ export class UndetectableApiService {
 
   async getConnectionSettings(): Promise<UndetectableConnection> {
     return this.resolveConnection();
+  }
+
+  async getBrowserHost(): Promise<string> {
+    const connection = await this.resolveConnection();
+    return connection.host;
   }
 
   async testConnection(input: ConnectionInput) {

@@ -47,17 +47,19 @@ export class JobsController {
   @Post('projects/:projectId/withdraw')
   withdrawProject(
     @Param('projectId') projectId: string,
+    @Body() dto: ExecuteProjectActionDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.jobsService.createProjectJob(projectId, 'withdraw', user.id);
+    return this.jobsService.createProjectJob(projectId, 'withdraw', user.id, dto);
   }
 
   @Post('projects/:projectId/disable-ads')
   disableAdsProject(
     @Param('projectId') projectId: string,
+    @Body() dto: ExecuteProjectActionDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.jobsService.createProjectJob(projectId, 'disable_ads', user.id);
+    return this.jobsService.createProjectJob(projectId, 'disable_ads', user.id, dto);
   }
 
   @Post('projects/:projectId/launch-ads')

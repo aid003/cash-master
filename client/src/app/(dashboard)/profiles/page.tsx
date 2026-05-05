@@ -54,6 +54,10 @@ export default function ProfilesPage() {
     id: string;
     name: string;
   } | null>(null);
+  const [disableAdsTarget, setDisableAdsTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const visibleProfiles = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
@@ -160,7 +164,12 @@ export default function ProfilesPage() {
                   <BusinessActions
                     mode="compact"
                     disabled={isMutating || !isOperational}
-                    onDisableAds={() => void disableAdsProfileAction(profile.id, profile.name)}
+                    onDisableAds={() =>
+                      setDisableAdsTarget({
+                        id: profile.id,
+                        name: profile.name,
+                      })
+                    }
                     onLaunchAds={() => void launchAdsProfileAction(profile.id, profile.name)}
                     onTopUpWallet={() =>
                       setTopUpTarget({
@@ -269,6 +278,33 @@ export default function ProfilesPage() {
           }
 
           await topUpWalletProfileAction(topUpTarget.id, topUpTarget.name, amount);
+        }}
+      />
+
+      <TopUpWalletDialog
+        open={Boolean(disableAdsTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDisableAdsTarget(null);
+          }
+        }}
+        isBusy={isMutating}
+        scope="profile"
+        targetLabel={disableAdsTarget?.name ?? ""}
+        title="Отключить рекламу"
+        description={
+          disableAdsTarget
+            ? `Укажите сумму в рублях для профиля «${disableAdsTarget.name}». Средства будут переведены из аванса в кошелек Avito.`
+            : "Укажите сумму в рублях."
+        }
+        placeholder="Например, 1000"
+        submitLabel="Создать задачу"
+        onSubmit={async (amount) => {
+          if (!disableAdsTarget) {
+            return;
+          }
+
+          await disableAdsProfileAction(disableAdsTarget.id, disableAdsTarget.name, amount);
         }}
       />
     </>

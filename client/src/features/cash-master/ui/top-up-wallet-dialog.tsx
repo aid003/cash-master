@@ -19,6 +19,11 @@ type TopUpWalletDialogProps = {
   isBusy?: boolean;
   scope: "project" | "profile";
   targetLabel: string;
+  title?: string;
+  description?: string;
+  fieldLabel?: string;
+  placeholder?: string;
+  submitLabel?: string;
   onOpenChange: (open: boolean) => void;
   onSubmit: (amount: number) => Promise<void>;
 };
@@ -28,6 +33,11 @@ export function TopUpWalletDialog({
   isBusy,
   scope,
   targetLabel,
+  title = "Пополнить кошелек",
+  description,
+  fieldLabel = "Сумма, RUB",
+  placeholder = "Например, 1500",
+  submitLabel = "Подтвердить",
   onOpenChange,
   onSubmit,
 }: TopUpWalletDialogProps) {
@@ -44,8 +54,8 @@ export function TopUpWalletDialog({
 
   async function handleSubmit() {
     const parsed = Number(amount);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setError("Введите сумму больше нуля.");
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      setError("Введите целую сумму больше нуля.");
       return;
     }
 
@@ -58,11 +68,12 @@ export function TopUpWalletDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Пополнить кошелек</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {scope === "project"
-              ? `Укажите сумму в рублях для проекта «${targetLabel}». Эта сумма будет применена к каждому профилю проекта.`
-              : `Укажите сумму в рублях для профиля «${targetLabel}».`}
+            {description ??
+              (scope === "project"
+                ? `Укажите сумму в рублях для проекта «${targetLabel}». Эта сумма будет применена к каждому профилю проекта.`
+                : `Укажите сумму в рублях для профиля «${targetLabel}».`)}
           </DialogDescription>
         </DialogHeader>
 
@@ -73,7 +84,7 @@ export function TopUpWalletDialog({
             void handleSubmit();
           }}
         >
-          <Field label="Сумма, RUB">
+          <Field label={fieldLabel}>
             <Input
               type="number"
               min="1"
@@ -81,7 +92,7 @@ export function TopUpWalletDialog({
               inputMode="numeric"
               value={amount}
               onChange={(event) => setAmount(event.target.value)}
-              placeholder="Например, 1500"
+              placeholder={placeholder}
               required
             />
           </Field>
@@ -93,12 +104,12 @@ export function TopUpWalletDialog({
               type="button"
               variant="outline"
               disabled={isBusy}
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
             >
               Отмена
             </Button>
             <Button type="submit" disabled={isBusy}>
-              {isBusy ? "Создаю задачу..." : "Подтвердить"}
+              {isBusy ? "Создаю задачу..." : submitLabel}
             </Button>
           </DialogFooter>
         </form>

@@ -338,8 +338,11 @@ export class JobsService {
   }
 
   private validateActionInput(action: ProfileActionType, options: CreateActionOptions) {
-    if (action === 'top_up_wallet' && !(typeof options.amount === 'number' && options.amount > 0)) {
-      throw new ConflictException('Top up wallet amount must be a positive number');
+    if (
+      (action === 'top_up_wallet' || action === 'disable_ads' || action === 'withdraw') &&
+      !(typeof options.amount === 'number' && Number.isInteger(options.amount) && options.amount > 0)
+    ) {
+      throw new ConflictException(`${this.getActionVerb(action)} amount must be a positive integer`);
     }
   }
 
@@ -357,10 +360,14 @@ export class JobsService {
       profileRecordId: input.profileRecordId,
     };
 
-    if (input.action === 'top_up_wallet') {
+    if (
+      input.action === 'top_up_wallet' ||
+      input.action === 'disable_ads' ||
+      input.action === 'withdraw'
+    ) {
       return {
         ...basePayload,
-        action: 'top_up_wallet',
+        action: input.action,
         amount: input.options?.amount ?? 0,
         currency: 'RUB',
       };

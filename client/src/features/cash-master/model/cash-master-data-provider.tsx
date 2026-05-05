@@ -62,7 +62,11 @@ type CashMasterDataContextValue = {
     port: number;
   }) => Promise<void>;
   selectProject: (projectId: string | null) => void;
-  disableAdsProfileAction: (profileId: string, profileName: string) => Promise<void>;
+  disableAdsProfileAction: (
+    profileId: string,
+    profileName: string,
+    amount: number,
+  ) => Promise<void>;
   launchAdsProfileAction: (profileId: string, profileName: string) => Promise<void>;
   topUpWalletProfileAction: (
     profileId: string,
@@ -70,7 +74,7 @@ type CashMasterDataContextValue = {
     amount: number,
   ) => Promise<void>;
   startProfileAction: (profileId: string, profileName: string) => Promise<void>;
-  disableAdsSelectedProjectAction: () => Promise<void>;
+  disableAdsSelectedProjectAction: (amount: number) => Promise<void>;
   launchAdsSelectedProjectAction: () => Promise<void>;
   topUpWalletSelectedProjectAction: (amount: number) => Promise<void>;
   startSelectedProjectProfilesAction: () => Promise<void>;
@@ -233,9 +237,9 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
       );
     },
     selectProject: (projectId) => setSelectedProjectId(projectId),
-    disableAdsProfileAction: async (profileId, profileName) => {
+    disableAdsProfileAction: async (profileId, profileName, amount) => {
       await runAction(
-        () => disableAdsProfile(profileId),
+        () => disableAdsProfile(profileId, amount),
         `Создаю задачу «Отключить рекламу» для ${profileName}...`,
         `Задача «Отключить рекламу» создана для ${profileName}`,
         { shouldRefreshSelectedProject: true },
@@ -265,13 +269,13 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
         { shouldRefreshSelectedProject: true },
       );
     },
-    disableAdsSelectedProjectAction: async () => {
+    disableAdsSelectedProjectAction: async (amount) => {
       if (!selectedProject) {
         return;
       }
 
       await runAction(
-        () => disableAdsProjectProfiles(selectedProject.id),
+        () => disableAdsProjectProfiles(selectedProject.id, amount),
         `Создаю задачу «Отключить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Отключить рекламу» создана для проекта ${selectedProject.name}`,
         { shouldRefreshSelectedProject: true },

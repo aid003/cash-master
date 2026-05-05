@@ -21,6 +21,7 @@ import {
 import { useCashMasterData } from "@/features/cash-master/model/cash-master-data-provider";
 import { BusinessActions } from "@/features/cash-master/ui/business-actions";
 import { TechnicalActionsMenu } from "@/features/cash-master/ui/technical-actions-menu";
+import { TopUpWalletDialog } from "@/features/cash-master/ui/top-up-wallet-dialog";
 import { cn } from "@/shared/lib/utils";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
@@ -202,6 +203,7 @@ export default function ProjectsPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isProfilesOpen, setIsProfilesOpen] = useState(false);
+  const [isDisableAdsOpen, setIsDisableAdsOpen] = useState(false);
   const [createForm, setCreateForm] = useState(emptyProjectForm);
   const [editForm, setEditForm] = useState(emptyProjectForm);
   const [availableProfilesSearch, setAvailableProfilesSearch] = useState("");
@@ -381,7 +383,7 @@ export default function ProjectsPage() {
                   <BusinessActions
                     showTopUpWallet={false}
                     disabled={projectActionDisabled}
-                    onDisableAds={() => void disableAdsSelectedProjectAction()}
+                    onDisableAds={() => setIsDisableAdsOpen(true)}
                     onLaunchAds={() => void launchAdsSelectedProjectAction()}
                     onTopUpWallet={() => undefined}
                   />
@@ -453,6 +455,25 @@ export default function ProjectsPage() {
         onSubmit={async () => {
           await updateSelectedProjectAction(editForm);
           setIsEditOpen(false);
+        }}
+      />
+
+      <TopUpWalletDialog
+        open={isDisableAdsOpen}
+        onOpenChange={setIsDisableAdsOpen}
+        isBusy={isMutating}
+        scope="project"
+        targetLabel={selectedProject?.name ?? ""}
+        title="Отключить рекламу"
+        description={
+          selectedProject
+            ? `Укажите сумму в рублях для проекта «${selectedProject.name}». Эта сумма будет применена к каждому доступному профилю проекта.`
+            : "Укажите сумму в рублях."
+        }
+        placeholder="Например, 1000"
+        submitLabel="Создать задачу"
+        onSubmit={async (amount) => {
+          await disableAdsSelectedProjectAction(amount);
         }}
       />
 

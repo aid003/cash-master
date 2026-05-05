@@ -37,11 +37,17 @@ export type TopUpWalletPayload = BaseActionPayload & {
   currency: 'RUB';
 };
 
-export type BasicActionPayload = BaseActionPayload & {
-  action: Exclude<ProfileActionType, 'top_up_wallet'>;
+export type RefundActionPayload = BaseActionPayload & {
+  action: 'disable_ads' | 'withdraw';
+  amount: number;
+  currency: 'RUB';
 };
 
-export type AvitoActionPayload = BasicActionPayload | TopUpWalletPayload;
+export type BasicActionPayload = BaseActionPayload & {
+  action: Exclude<ProfileActionType, 'disable_ads' | 'withdraw' | 'top_up_wallet'>;
+};
+
+export type AvitoActionPayload = BasicActionPayload | RefundActionPayload | TopUpWalletPayload;
 
 export type ActionExecutionProfile = UndetectableProfile & {
   project: Pick<Project, 'id' | 'name' | 'status'> | null;
@@ -55,6 +61,7 @@ export type ActionExecutionContext = {
   profile: ActionExecutionProfile;
   runtimeSnapshot: {
     status: ProfileLifecycleStatus;
+    browserHost: string;
     debugPort: string | null;
     websocketLink: string | null;
     isMissing: boolean;
