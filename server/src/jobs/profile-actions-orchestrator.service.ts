@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ProfileLifecycleStatus, type Prisma } from '@prisma/client';
+import puppeteer from 'puppeteer';
 
 import { PrismaService } from '../database/prisma.service';
 import { ProfilesService } from '../profiles/profiles.service';
@@ -20,6 +21,9 @@ import {
 
 @Injectable()
 export class ProfileActionsOrchestratorService {
+  private static readonly PROFILE_READY_TIMEOUT_MS = 45_000;
+  private static readonly PROFILE_READY_POLL_MS = 1_500;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly profilesService: ProfilesService,
@@ -32,6 +36,7 @@ export class ProfileActionsOrchestratorService {
     const steps: ActionStep[] = [];
     let context = await this.buildContext(jobItemId, payload);
     let startedByOrchestrator = false;
+    let browserReadyConfirmed = false;
     let executionError: ActionExecutionError | null = null;
 
     this.validateContext(context);
@@ -49,7 +54,23 @@ export class ProfileActionsOrchestratorService {
         steps.push(this.createStep('existing_session_reused', 'Using existing browser session'));
       }
 
+      steps.push(
+        this.createStep(
+          'browser_ready_wait_started',
+          'Waiting for browser websocket and page readiness',
+        ),
+      );
+      const readiness = await this.waitForBrowserReady(context);
+      browserReadyConfirmed = true;
+      steps.push(
+        this.createStep(
+          'browser_ready_confirmed',
+          `Browser ready at ${readiness.activePageUrl} with ${readiness.pageCount} page(s)`,
+        ),
+      );
+
       const runnerResult = await this.executeRunner(context);
+      steps.push(...(runnerResult.steps ?? []));
       steps.push(this.createStep('runner_completed', runnerResult.message));
 
       return {
@@ -80,7 +101,7 @@ export class ProfileActionsOrchestratorService {
             );
       throw executionError;
     } finally {
-      if (startedByOrchestrator) {
+      if (startedByOrchestrator && browserReadyConfirmed) {
         try {
           steps.push(this.createStep('auto_stop_requested', 'Stopping profile after Avito action'));
           await this.undetectableApiService.stopProfile(context.profile.profileId);
@@ -113,6 +134,7 @@ export class ProfileActionsOrchestratorService {
 
   private async executeRunner(context: ActionExecutionContext) {
     switch (context.action.action) {
+      case 'disable_ads':
       case 'withdraw':
         return this.avitoActionRunner.executeWithdraw(context);
       case 'launch_ads':
@@ -229,6 +251,67 @@ export class ProfileActionsOrchestratorService {
     );
   }
 
+  private async waitForBrowserReady(context: ActionExecutionContext) {
+    const startedAt = Date.now();
+    let lastReason = 'Browser websocket is not available yet';
+
+    while (Date.now() - startedAt < ProfileActionsOrchestratorService.PROFILE_READY_TIMEOUT_MS) {
+      await this.profilesService.refreshRuntimeSnapshot(context.profile.id);
+      const freshContext = await this.buildContext(context.jobItem.id, context.action);
+
+      if (
+        freshContext.runtimeSnapshot.status !== ProfileLifecycleStatus.STARTED ||
+        !freshContext.runtimeSnapshot.websocketLink
+      ) {
+        lastReason = `Profile state is ${freshContext.runtimeSnapshot.status}, websocket pending`;
+        await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
+        continue;
+      }
+
+      let browser: Awaited<ReturnType<typeof puppeteer.connect>> | null = null;
+      try {
+        browser = await puppeteer.connect({
+          browserWSEndpoint: freshContext.runtimeSnapshot.websocketLink,
+          defaultViewport: null,
+        });
+
+        const pages = await browser.pages();
+        const page = pages[0] ?? (await browser.newPage());
+        const readyState = await page.evaluate(() => document.readyState);
+
+        return {
+          pageCount: pages.length || 1,
+          activePageUrl: page.url() || 'about:blank',
+          readyState,
+        };
+      } catch (error) {
+        lastReason = error instanceof Error ? error.message : 'Unknown browser readiness error';
+        await this.sleep(ProfileActionsOrchestratorService.PROFILE_READY_POLL_MS);
+      } finally {
+        if (browser) {
+          await browser.disconnect();
+        }
+      }
+    }
+
+    throw new ActionExecutionError(
+      `Browser did not become ready within ${ProfileActionsOrchestratorService.PROFILE_READY_TIMEOUT_MS}ms: ${lastReason}`,
+      this.buildFailureResult(
+        context.action.action,
+        new Date(),
+        `Browser did not become ready within ${ProfileActionsOrchestratorService.PROFILE_READY_TIMEOUT_MS}ms: ${lastReason}`,
+        'BROWSER_NOT_READY',
+        {
+          profileId: context.profile.profileId,
+          websocketLinkPresent: Boolean(context.runtimeSnapshot.websocketLink),
+          status: context.runtimeSnapshot.status,
+          timeoutMs: ProfileActionsOrchestratorService.PROFILE_READY_TIMEOUT_MS,
+          lastReason,
+        },
+      ),
+    );
+  }
+
   private buildFailureResult(
     action: ProfileActionType,
     startedAt: Date,
@@ -279,5 +362,9 @@ export class ProfileActionsOrchestratorService {
     }
 
     return JSON.parse(JSON.stringify(error));
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

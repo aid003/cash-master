@@ -9,15 +9,14 @@ import {
 } from "react";
 
 import {
-  bootstrapAdmin,
-  getBootstrapStatus,
   login,
   logout,
   me,
+  signup,
   type AuthUser,
 } from "@/shared/api/cash-master";
 
-type AuthMode = "login" | "bootstrap";
+type AuthMode = "login" | "register";
 type SessionStatus = "loading" | "authenticated" | "unauthenticated";
 
 type SessionContextValue = {
@@ -29,6 +28,7 @@ type SessionContextValue = {
   authenticate: (payload: { email: string; password: string }) => Promise<boolean>;
   clearError: () => void;
   refreshSession: () => Promise<void>;
+  setAuthMode: (mode: AuthMode) => void;
   signOut: () => Promise<void>;
 };
 
@@ -45,24 +45,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setStatus("loading");
     setError(null);
 
-    const [bootstrapStatus, currentUser] = await Promise.allSettled([
-      getBootstrapStatus(),
-      me(),
-    ]);
-
-    const needsBootstrap =
-      bootstrapStatus.status === "fulfilled" ? bootstrapStatus.value.needsBootstrap : false;
-
-    if (currentUser.status === "fulfilled") {
-      setUser(currentUser.value.user);
+    try {
+      const currentUser = await me();
+      setUser(currentUser.user);
       setAuthMode("login");
       setStatus("authenticated");
-      return;
+    } catch {
+      setUser(null);
+      setStatus("unauthenticated");
     }
-
-    setUser(null);
-    setAuthMode(needsBootstrap ? "bootstrap" : "login");
-    setStatus("unauthenticated");
   }
 
   useEffect(() => {
@@ -71,7 +62,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setAuthMode("login");
       setStatus("unauthenticated");
-    setError(
+      setError(
         sessionError instanceof Error ? sessionError.message : "Failed to restore session",
       );
     });
@@ -83,8 +74,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     try {
       const result =
-        authMode === "bootstrap"
-          ? await bootstrapAdmin(payload.email, payload.password)
+        authMode === "register"
+          ? await signup(payload.email, payload.password)
           : await login(payload.email, payload.password);
 
       setUser(result.user);
@@ -123,6 +114,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     authenticate,
     clearError: () => setError(null),
     refreshSession,
+    setAuthMode,
     signOut,
   };
 

@@ -52,6 +52,14 @@ export class JobsController {
     return this.jobsService.createProjectJob(projectId, 'withdraw', user.id);
   }
 
+  @Post('projects/:projectId/disable-ads')
+  disableAdsProject(
+    @Param('projectId') projectId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createProjectJob(projectId, 'disable_ads', user.id);
+  }
+
   @Post('projects/:projectId/launch-ads')
   launchAdsProject(
     @Param('projectId') projectId: string,

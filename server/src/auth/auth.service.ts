@@ -8,8 +8,8 @@ import { UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 import { PrismaService } from '../database/prisma.service';
-import { BootstrapDto } from './dto/bootstrap.dto';
 import { LoginDto } from './dto/login.dto';
+import { SignupDto } from './dto/signup.dto';
 
 type SafeUser = {
   id: string;
@@ -26,12 +26,14 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async bootstrap(dto: BootstrapDto): Promise<SafeUser> {
-    const adminsCount = await this.prisma.user.count({
-      where: { role: UserRole.ADMIN },
+  async signup(dto: SignupDto): Promise<SafeUser> {
+    const existingUser = await this.prisma.user.findUnique({
+      where: {
+        email: dto.email.toLowerCase(),
+      },
     });
-    if (adminsCount > 0) {
-      throw new ConflictException('Bootstrap is available only before first user is created');
+    if (existingUser) {
+      throw new ConflictException('User with this email already exists');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
@@ -43,13 +45,6 @@ export class AuthService {
     });
 
     return this.toSafeUser(user);
-  }
-
-  async getBootstrapStatus(): Promise<{ needsBootstrap: boolean }> {
-    const adminsCount = await this.prisma.user.count({
-      where: { role: UserRole.ADMIN },
-    });
-    return { needsBootstrap: adminsCount === 0 };
   }
 
   async validateLogin(dto: LoginDto): Promise<SafeUser> {

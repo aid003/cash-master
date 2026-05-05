@@ -15,10 +15,8 @@ import {
 
 import {
   assignProfile,
-  bootstrapAdmin,
   createProject,
   getUndetectableConnectionSettings,
-  getBootstrapStatus,
   getProject,
   listJobs,
   listProfiles,
@@ -27,6 +25,7 @@ import {
   logout,
   me,
   saveUndetectableConnectionSettings,
+  signup,
   startProfile,
   startProjectProfiles,
   stopProfile,
@@ -44,7 +43,7 @@ import {
 } from "@/shared/api/cash-master";
 import { Button } from "@/shared/ui/button";
 
-type AuthMode = "login" | "bootstrap";
+type AuthMode = "login" | "register";
 
 const projectStatuses = [
   { value: "active", label: "Active" },
@@ -241,27 +240,17 @@ export function HomeScreen() {
   useEffect(() => {
     async function boot() {
       try {
-        const [bootstrapStatus, currentUser] = await Promise.allSettled([
-          getBootstrapStatus(),
-          me(),
-        ]);
+        const currentUser = await me().catch(() => null);
 
-        if (
-          bootstrapStatus.status === "fulfilled" &&
-          bootstrapStatus.value.needsBootstrap
-        ) {
-          setAuthMode("bootstrap");
-        }
-
-        if (currentUser.status === "fulfilled") {
-          setUser(currentUser.value.user);
+        if (currentUser) {
+          setUser(currentUser.user);
           const [projectsData, profilesData, jobsData, connectionSettingsData] =
             await Promise.all([
-            listProjects(),
-            listProfiles(),
-            listJobs(),
-            getUndetectableConnectionSettings(),
-          ]);
+              listProjects(),
+              listProfiles(),
+              listJobs(),
+              getUndetectableConnectionSettings(),
+            ]);
           setProjects(projectsData);
           setProfiles(profilesData);
           setJobs(jobsData);
@@ -287,10 +276,11 @@ export function HomeScreen() {
 
     try {
       const result =
-        authMode === "bootstrap"
-          ? await bootstrapAdmin(email, password)
+        authMode === "register"
+          ? await signup(email, password)
           : await login(email, password);
       setUser(result.user);
+      setAuthMode("login");
       setPassword("");
       await hydrate();
     } catch (error) {
@@ -311,8 +301,7 @@ export function HomeScreen() {
       setConnectionSettings(null);
       setSelectedProjectId(null);
       setMessage(null);
-      const bootstrapStatus = await getBootstrapStatus();
-      setAuthMode(bootstrapStatus.needsBootstrap ? "bootstrap" : "login");
+      setAuthMode("login");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Logout failed");
     } finally {
@@ -458,13 +447,38 @@ export function HomeScreen() {
             >
               <div className="mb-6 space-y-2">
                 <p className="text-sm uppercase tracking-[0.25em] text-primary">
-                  {authMode === "bootstrap" ? "Bootstrap Admin" : "Admin Login"}
+                  {authMode === "register" ? "Admin Register" : "Admin Login"}
                 </p>
                 <h2 className="text-3xl font-semibold text-foreground">
-                  {authMode === "bootstrap"
-                    ? "Создайте первого администратора"
+                  {authMode === "register"
+                    ? "Создайте аккаунт администратора"
                     : "Войдите в панель управления"}
                 </h2>
+              </div>
+
+              <div className="mb-4 grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={authMode === "login" ? "secondary" : "ghost"}
+                  onClick={() => {
+                    setMessage(null);
+                    setPassword("");
+                    setAuthMode("login");
+                  }}
+                >
+                  Login
+                </Button>
+                <Button
+                  type="button"
+                  variant={authMode === "register" ? "secondary" : "ghost"}
+                  onClick={() => {
+                    setMessage(null);
+                    setPassword("");
+                    setAuthMode("register");
+                  }}
+                >
+                  Register
+                </Button>
               </div>
 
               <div className="grid gap-4">
@@ -493,8 +507,8 @@ export function HomeScreen() {
                 >
                   {submitting
                     ? "Processing..."
-                    : authMode === "bootstrap"
-                      ? "Create admin"
+                    : authMode === "register"
+                      ? "Create account"
                       : "Sign in"}
                 </Button>
               </div>

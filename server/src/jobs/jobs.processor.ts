@@ -54,10 +54,18 @@ export class JobsProcessor extends WorkerHost {
         result = await this.profileActionsOrchestrator.execute(jobItem.id, payload);
       }
 
-      await this.jobsService.markItemCompleted(
-        jobItem.id,
-        result as Prisma.InputJsonValue,
-      );
+      if (this.isSuccessfulResult(result)) {
+        await this.jobsService.markItemCompleted(
+          jobItem.id,
+          result as Prisma.InputJsonValue,
+        );
+      } else {
+        await this.jobsService.markItemFailedWithResult(
+          jobItem.id,
+          result.message,
+          result as Prisma.InputJsonValue,
+        );
+      }
     } catch (error) {
       const payload = this.getActionPayload(jobItem.payloadJson, jobItem.job.type);
       const failureResult = this.getFailureResult(error, payload.action);
@@ -166,9 +174,19 @@ export class JobsProcessor extends WorkerHost {
     return (
       value === 'start' ||
       value === 'stop' ||
+      value === 'disable_ads' ||
       value === 'withdraw' ||
       value === 'launch_ads' ||
       value === 'top_up_wallet'
+    );
+  }
+
+  private isSuccessfulResult(result: AvitoActionResult) {
+    return (
+      result.outcomeCode === 'PROFILE_STARTED' ||
+      result.outcomeCode === 'PROFILE_STOPPED' ||
+      result.outcomeCode === 'TOP_UP_WALLET_STUB' ||
+      result.outcomeCode.endsWith('_COMPLETED')
     );
   }
 }

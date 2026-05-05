@@ -378,6 +378,8 @@ export class JobsService {
         return 'Start';
       case 'stop':
         return 'Stop';
+      case 'disable_ads':
+        return 'Disable ads';
       case 'withdraw':
         return 'Withdraw';
       case 'launch_ads':

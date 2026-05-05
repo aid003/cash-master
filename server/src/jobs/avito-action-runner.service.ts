@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 
-import type {
-  ActionExecutionContext,
-  AvitoActionRunner,
-  RunnerExecutionResult,
+import {
+  ActionExecutionError,
+  type ActionStep,
+  type AvitoActionResult,
+  type ActionExecutionContext,
+  type AvitoActionRunner,
+  type RunnerExecutionResult,
 } from './profile-actions.types';
 
 @Injectable()
@@ -15,13 +18,15 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
   async executeWithdraw(
     context: ActionExecutionContext,
   ): Promise<RunnerExecutionResult> {
+    const isDisableAds = context.action.action === 'disable_ads';
+    const actionLabel = isDisableAds ? 'disable ads' : 'withdraw';
     const websocketLink = context.runtimeSnapshot.websocketLink;
     if (!websocketLink) {
-      return {
-        outcomeCode: 'WITHDRAW_WEBSOCKET_MISSING',
-        message: 'Profile websocket link is missing, cannot connect to browser.',
-        runnerMode: 'undetectable',
-        rawResult: {
+      throw this.createRunnerError(
+        context,
+        `${this.getActionPrefix(context)}_WEBSOCKET_MISSING`,
+        'Profile websocket link is missing, cannot connect to browser.',
+        {
           action: context.action.action,
           jobId: context.job.id,
           jobItemId: context.jobItem.id,
@@ -29,48 +34,48 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
           profileId: context.profile.profileId,
           currentStatus: context.runtimeSnapshot.status,
         },
-      };
+      );
     }
 
     let browser: Browser | null = null;
+    const steps: ActionStep[] = [this.createStep('avito_navigation_started', `Preparing ${actionLabel} browser flow`)];
     try {
       browser = await puppeteer.connect({
         browserWSEndpoint: websocketLink,
         defaultViewport: null,
       });
 
-      const page = await this.resolveAvitoTariffPage(browser);
+      const page = await this.resolveAvitoTariffPage(browser, steps);
       await page.bringToFront();
 
       await this.openWithdrawModal(page);
       const amountMeta = await this.readWholeRublesAmount(page);
       if (!amountMeta) {
-        return {
-          outcomeCode: 'WITHDRAW_BALANCE_NOT_FOUND',
-          message:
-            'Withdraw amount is not visible in modal, cannot continue safely.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          `${this.getActionPrefix(context)}_BALANCE_NOT_FOUND`,
+          'Withdraw amount is not visible in modal, cannot continue safely.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
             wsConnected: true,
-          },
-        };
+          }),
+          steps,
+        );
       }
 
       if (amountMeta.rubles <= 0) {
-        return {
-          outcomeCode: 'WITHDRAW_NON_POSITIVE_BALANCE',
-          message: 'Available withdraw balance is zero after removing kopeks.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          `${this.getActionPrefix(context)}_NON_POSITIVE_BALANCE`,
+          'Available withdraw balance is zero after removing kopeks.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
             rawAmountText: amountMeta.rawText,
             parsedAmount: amountMeta.parsed,
             roundedRubles: amountMeta.rubles,
-          },
-        };
+          }),
+          steps,
+        );
       }
 
       await this.fillWithdrawAmount(page, amountMeta.rubles);
@@ -78,49 +83,54 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
       const confirmation = await this.waitForWithdrawConfirmation(page);
 
       if (!confirmation) {
-        return {
-          outcomeCode: 'WITHDRAW_CONFIRMATION_NOT_FOUND',
-          message: 'Withdraw submit clicked, but success confirmation was not found.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          `${this.getActionPrefix(context)}_CONFIRMATION_NOT_FOUND`,
+          'Withdraw submit clicked, but success confirmation was not found.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
             rawAmountText: amountMeta.rawText,
             parsedAmount: amountMeta.parsed,
             roundedRubles: amountMeta.rubles,
-          },
-        };
+          }),
+          steps,
+        );
       }
 
+      steps.push(this.createStep('avito_dom_ready', `Avito ${actionLabel} flow confirmed`));
       return {
-        outcomeCode: 'WITHDRAW_COMPLETED',
-        message: `Transferred ${amountMeta.rubles} RUB from advance to wallet.`,
+        outcomeCode: `${this.getActionPrefix(context)}_COMPLETED`,
+        message: isDisableAds
+          ? `Disable ads flow moved ${amountMeta.rubles} RUB from advance to wallet.`
+          : `Transferred ${amountMeta.rubles} RUB from advance to wallet.`,
         runnerMode: 'undetectable',
-        rawResult: {
+        rawResult: await this.capturePageDiagnostics(page, {
           profileId: context.profile.profileId,
-          pageUrl: page.url(),
           rawAmountText: amountMeta.rawText,
           parsedAmount: amountMeta.parsed,
           roundedRubles: amountMeta.rubles,
           confirmationText: confirmation,
-        },
+        }),
+        steps,
       };
     } catch (error) {
-      return {
-        outcomeCode: 'WITHDRAW_EXECUTION_ERROR',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unknown withdraw automation error',
-        runnerMode: 'undetectable',
-        rawResult: {
+      if (error instanceof ActionExecutionError) {
+        throw error;
+      }
+
+      throw this.createRunnerError(
+        context,
+        `${this.getActionPrefix(context)}_EXECUTION_ERROR`,
+        error instanceof Error ? error.message : 'Unknown withdraw automation error',
+        {
           profileId: context.profile.profileId,
           error:
             error instanceof Error
               ? { name: error.name, message: error.message }
               : String(error),
         },
-      };
+        steps,
+      );
     } finally {
       if (browser) {
         await browser.disconnect();
@@ -133,55 +143,56 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
   ): Promise<RunnerExecutionResult> {
     const websocketLink = context.runtimeSnapshot.websocketLink;
     if (!websocketLink) {
-      return {
-        outcomeCode: 'LAUNCH_ADS_WEBSOCKET_MISSING',
-        message: 'Profile websocket link is missing, cannot connect to browser.',
-        runnerMode: 'undetectable',
-        rawResult: {
+      throw this.createRunnerError(
+        context,
+        'LAUNCH_ADS_WEBSOCKET_MISSING',
+        'Profile websocket link is missing, cannot connect to browser.',
+        {
           action: context.action.action,
           profileId: context.profile.profileId,
           currentStatus: context.runtimeSnapshot.status,
         },
-      };
+      );
     }
 
     let browser: Browser | null = null;
+    const steps: ActionStep[] = [this.createStep('avito_navigation_started', 'Preparing launch ads browser flow')];
     try {
       browser = await puppeteer.connect({
         browserWSEndpoint: websocketLink,
         defaultViewport: null,
       });
 
-      const page = await this.resolveAvitoTopUpPage(browser);
+      const page = await this.resolveAvitoTopUpPage(browser, steps);
       await page.bringToFront();
 
       const balance = await this.readSidebarBalance(page);
       if (!balance) {
-        return {
-          outcomeCode: 'LAUNCH_ADS_BALANCE_NOT_FOUND',
-          message: 'Could not read balance before top up flow.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          'LAUNCH_ADS_BALANCE_NOT_FOUND',
+          'Could not read balance before top up flow.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
-          },
-        };
+          }),
+          steps,
+        );
       }
 
       const amountToTopUp = Math.floor(balance.parsed) - 1;
       if (amountToTopUp <= 0) {
-        return {
-          outcomeCode: 'LAUNCH_ADS_AMOUNT_NON_POSITIVE',
-          message: 'Top up amount is non-positive after applying balance - 1 rule.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          'LAUNCH_ADS_AMOUNT_NON_POSITIVE',
+          'Top up amount is non-positive after applying balance - 1 rule.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
             rawBalanceText: balance.rawText,
             parsedBalance: balance.parsed,
             amountToTopUp,
-          },
-        };
+          }),
+          steps,
+        );
       }
 
       await page.click('[data-marker="advanceButton"]');
@@ -205,18 +216,18 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
       });
 
       if (!selectedWallet) {
-        return {
-          outcomeCode: 'LAUNCH_ADS_PAYMENT_VARIANT_NOT_FOUND',
-          message: 'Payment variant "Кошелёк" was not found.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          'LAUNCH_ADS_PAYMENT_VARIANT_NOT_FOUND',
+          'Payment variant "Кошелёк" was not found.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
             rawBalanceText: balance.rawText,
             parsedBalance: balance.parsed,
             amountToTopUp,
-          },
-        };
+          }),
+          steps,
+        );
       }
 
       await page.click('[data-marker="submit-btn"]');
@@ -227,28 +238,27 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
 
       const confirmationText = await this.waitForLaunchAdsConfirmation(page);
       if (!confirmationText) {
-        return {
-          outcomeCode: 'LAUNCH_ADS_CONFIRMATION_NOT_FOUND',
-          message:
-            'Top up confirmations were clicked, but success confirmation was not found.',
-          runnerMode: 'undetectable',
-          rawResult: {
+        throw this.createRunnerError(
+          context,
+          'LAUNCH_ADS_CONFIRMATION_NOT_FOUND',
+          'Top up confirmations were clicked, but success confirmation was not found.',
+          await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
-            pageUrl: page.url(),
             rawBalanceText: balance.rawText,
             parsedBalance: balance.parsed,
             amountToTopUp,
-          },
-        };
+          }),
+          steps,
+        );
       }
 
+      steps.push(this.createStep('avito_dom_ready', 'Avito launch ads flow confirmed'));
       return {
         outcomeCode: 'LAUNCH_ADS_COMPLETED',
         message: `Transferred ${amountToTopUp} RUB from wallet to advance.`,
         runnerMode: 'undetectable',
-        rawResult: {
+        rawResult: await this.capturePageDiagnostics(page, {
           profileId: context.profile.profileId,
-          pageUrl: page.url(),
           rawBalanceText: balance.rawText,
           parsedBalance: balance.parsed,
           amountToTopUp,
@@ -259,24 +269,27 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             clickedSubmitBtn: true,
             clickedPayButton: true,
           },
-        },
+        }),
+        steps,
       };
     } catch (error) {
-      return {
-        outcomeCode: 'LAUNCH_ADS_EXECUTION_ERROR',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Unknown launch ads automation error',
-        runnerMode: 'undetectable',
-        rawResult: {
+      if (error instanceof ActionExecutionError) {
+        throw error;
+      }
+
+      throw this.createRunnerError(
+        context,
+        'LAUNCH_ADS_EXECUTION_ERROR',
+        error instanceof Error ? error.message : 'Unknown launch ads automation error',
+        {
           profileId: context.profile.profileId,
           error:
             error instanceof Error
               ? { name: error.name, message: error.message }
               : String(error),
         },
-      };
+        steps,
+      );
     } finally {
       if (browser) {
         await browser.disconnect();
@@ -317,26 +330,35 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
     };
   }
 
-  private async resolveAvitoTariffPage(browser: Browser): Promise<Page> {
+  private async resolveAvitoTariffPage(browser: Browser, steps?: ActionStep[]): Promise<Page> {
     const pages = await browser.pages();
     const existing = pages.find((page) =>
       page.url().startsWith(AvitoActionRunnerService.AVITO_WITHDRAW_URL),
     );
     if (existing) {
+      await this.ensurePageReady(existing);
       await existing.waitForSelector('[data-marker="advanceMoreButton"]', {
         timeout: AvitoActionRunnerService.TIMEOUT_MS,
       });
+      steps?.push(
+        this.createStep('avito_dom_ready', `Existing Avito page ready at ${existing.url()}`),
+      );
       return existing;
     }
 
     const page = pages[0] ?? (await browser.newPage());
+    await this.ensurePageReady(page);
     await page.goto(AvitoActionRunnerService.AVITO_WITHDRAW_URL, {
       waitUntil: 'domcontentloaded',
       timeout: AvitoActionRunnerService.TIMEOUT_MS,
     });
+    await this.ensurePageReady(page);
     await page.waitForSelector('[data-marker="advanceMoreButton"]', {
       timeout: AvitoActionRunnerService.TIMEOUT_MS,
     });
+    steps?.push(
+      this.createStep('avito_dom_ready', `Avito tariff page ready at ${page.url()}`),
+    );
     return page;
   }
 
@@ -433,8 +455,8 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
     await page.click('[data-marker="refundAdvanceButton"]');
   }
 
-  private async resolveAvitoTopUpPage(browser: Browser): Promise<Page> {
-    const page = await this.resolveAvitoTariffPage(browser);
+  private async resolveAvitoTopUpPage(browser: Browser, steps?: ActionStep[]): Promise<Page> {
+    const page = await this.resolveAvitoTariffPage(browser, steps);
     await page.waitForSelector('[data-marker="advanceButton"]', {
       timeout: AvitoActionRunnerService.TIMEOUT_MS,
     });
@@ -528,5 +550,60 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
       );
       return status?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
     });
+  }
+
+  private async ensurePageReady(page: Page): Promise<void> {
+    await page.waitForFunction(
+      () => document.readyState === 'interactive' || document.readyState === 'complete',
+      {
+        timeout: AvitoActionRunnerService.TIMEOUT_MS,
+      },
+    );
+  }
+
+  private async capturePageDiagnostics(
+    page: Page,
+    details: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const readyState = await page.evaluate(() => document.readyState).catch(() => 'unavailable');
+    return {
+      ...details,
+      pageUrl: page.url(),
+      readyState,
+    };
+  }
+
+  private createRunnerError(
+    context: ActionExecutionContext,
+    outcomeCode: string,
+    message: string,
+    rawError: unknown,
+    steps?: ActionStep[],
+  ) {
+    const result: AvitoActionResult = {
+      action: context.action.action,
+      outcomeCode,
+      message,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      runnerMode: 'undetectable',
+      rawResult: null,
+      rawError,
+      steps,
+    };
+
+    return new ActionExecutionError(message, result);
+  }
+
+  private createStep(code: string, message: string): ActionStep {
+    return {
+      code,
+      message,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private getActionPrefix(context: ActionExecutionContext) {
+    return context.action.action === 'disable_ads' ? 'DISABLE_ADS' : 'WITHDRAW';
   }
 }

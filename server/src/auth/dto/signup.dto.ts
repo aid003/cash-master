@@ -1,6 +1,6 @@
 import { IsEmail, IsString, MinLength } from 'class-validator';
 
-export class BootstrapDto {
+export class SignupDto {
   @IsEmail()
   email!: string;
 

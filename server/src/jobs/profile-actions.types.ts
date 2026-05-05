@@ -9,6 +9,7 @@ import type {
 export const profileActionTypes = [
   'start',
   'stop',
+  'disable_ads',
   'withdraw',
   'launch_ads',
   'top_up_wallet',
@@ -79,6 +80,7 @@ export type RunnerExecutionResult = {
   message: string;
   runnerMode: 'stub' | 'undetectable';
   rawResult: unknown;
+  steps?: ActionStep[];
 };
 
 export interface AvitoActionRunner {

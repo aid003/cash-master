@@ -133,12 +133,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return data as T;
 }
 
-export async function getBootstrapStatus() {
-  return request<{ needsBootstrap: boolean }>("/auth/bootstrap-status");
-}
-
-export async function bootstrapAdmin(email: string, password: string) {
-  return request<{ user: AuthUser }>("/auth/bootstrap", {
+export async function signup(email: string, password: string) {
+  return request<{ user: AuthUser }>("/auth/signup", {
     method: "POST",
     bodyJson: { email, password },
   });
@@ -263,6 +259,12 @@ export async function withdrawProfile(profileRecordId: string) {
   });
 }
 
+export async function disableAdsProfile(profileRecordId: string) {
+  return request<Job>(`/profiles/${profileRecordId}/disable-ads`, {
+    method: "POST",
+  });
+}
+
 export async function launchAdsProfile(profileRecordId: string) {
   return request<Job>(`/profiles/${profileRecordId}/launch-ads`, {
     method: "POST",
@@ -294,6 +296,12 @@ export async function stopProjectProfiles(projectId: string) {
 
 export async function withdrawProjectProfiles(projectId: string) {
   return request<Job>(`/jobs/projects/${projectId}/withdraw`, {
+    method: "POST",
+  });
+}
+
+export async function disableAdsProjectProfiles(projectId: string) {
+  return request<Job>(`/jobs/projects/${projectId}/disable-ads`, {
     method: "POST",
   });
 }

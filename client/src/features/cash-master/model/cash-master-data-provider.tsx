@@ -12,6 +12,8 @@ import { toast } from "sonner";
 import {
   assignProfile,
   createProject,
+  disableAdsProfile,
+  disableAdsProjectProfiles,
   getProject,
   getUndetectableConnectionSettings,
   launchAdsProfile,
@@ -30,8 +32,6 @@ import {
   topUpWalletProjectProfiles,
   unassignProfile,
   updateProject,
-  withdrawProfile,
-  withdrawProjectProfiles,
   type Job,
   type Profile,
   type Project,
@@ -235,7 +235,7 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
     selectProject: (projectId) => setSelectedProjectId(projectId),
     disableAdsProfileAction: async (profileId, profileName) => {
       await runAction(
-        () => withdrawProfile(profileId),
+        () => disableAdsProfile(profileId),
         `Создаю задачу «Отключить рекламу» для ${profileName}...`,
         `Задача «Отключить рекламу» создана для ${profileName}`,
         { shouldRefreshSelectedProject: true },
@@ -271,7 +271,7 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
       }
 
       await runAction(
-        () => withdrawProjectProfiles(selectedProject.id),
+        () => disableAdsProjectProfiles(selectedProject.id),
         `Создаю задачу «Отключить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Отключить рекламу» создана для проекта ${selectedProject.name}`,
         { shouldRefreshSelectedProject: true },

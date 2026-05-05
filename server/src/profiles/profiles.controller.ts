@@ -88,6 +88,14 @@ export class ProfilesController {
     return this.jobsService.createSingleProfileJob(profileRecordId, 'withdraw', user.id);
   }
 
+  @Post(':profileRecordId/disable-ads')
+  disableAds(
+    @Param('profileRecordId') profileRecordId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.jobsService.createSingleProfileJob(profileRecordId, 'disable_ads', user.id);
+  }
+
   @Post(':profileRecordId/launch-ads')
   launchAds(
     @Param('profileRecordId') profileRecordId: string,

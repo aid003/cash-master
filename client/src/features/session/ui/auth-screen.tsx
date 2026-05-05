@@ -13,9 +13,11 @@ import { Input } from "@/shared/ui/input";
 
 export function AuthScreen() {
   const router = useRouter();
-  const { authMode, authenticate, clearError, error, isSubmitting, status } = useSession();
+  const { authMode, authenticate, clearError, error, isSubmitting, setAuthMode, status } =
+    useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const isRegisterMode = authMode === "register";
 
   useEffect(() => {
     if (status === "authenticated") {
@@ -77,23 +79,47 @@ export function AuthScreen() {
 
         <Card className="my-auto">
           <CardHeader>
-            <Badge variant={authMode === "bootstrap" ? "warning" : "info"} className="w-fit">
+            <Badge variant={isRegisterMode ? "accent" : "info"} className="w-fit">
               <Sparkles className="mr-2 size-3.5" />
-              {authMode === "bootstrap" ? "Bootstrap" : "Admin Login"}
+              {isRegisterMode ? "Admin Register" : "Admin Login"}
             </Badge>
             <CardTitle className="text-3xl">
-              {authMode === "bootstrap"
-                ? "Создайте первого администратора"
-                : "Войдите в панель управления"}
+              {isRegisterMode ? "Создайте аккаунт администратора" : "Войдите в панель управления"}
             </CardTitle>
             <CardDescription>
-              {authMode === "bootstrap"
-                ? "Экран bootstrap доступен только если в базе ещё нет администратора."
-                : "Если администратор уже существует, система всегда открывает обычный вход."}
+              {isRegisterMode
+                ? "Регистрация создаёт новый admin-аккаунт и сразу открывает рабочую панель."
+                : "Используйте существующий admin-аккаунт для входа в локальную панель."}
             </CardDescription>
           </CardHeader>
 
           <CardContent>
+            <div className="mb-5 grid grid-cols-2 gap-2 rounded-[1.35rem] border border-white/8 bg-black/15 p-1">
+              <Button
+                type="button"
+                variant={isRegisterMode ? "ghost" : "secondary"}
+                className="h-11 rounded-[1rem]"
+                onClick={() => {
+                  clearError();
+                  setPassword("");
+                  setAuthMode("login");
+                }}
+              >
+                Login
+              </Button>
+              <Button
+                type="button"
+                variant={isRegisterMode ? "secondary" : "ghost"}
+                className="h-11 rounded-[1rem]"
+                onClick={() => {
+                  clearError();
+                  setPassword("");
+                  setAuthMode("register");
+                }}
+              >
+                Register
+              </Button>
+            </div>
             <form
               className="grid gap-4"
               onSubmit={(event) => {
@@ -116,12 +142,10 @@ export function AuthScreen() {
                   required
                 />
               </Field>
-              <Field label="Password" hint={authMode === "bootstrap" ? "min 8 symbols" : undefined}>
+              <Field label="Password" hint={isRegisterMode ? "min 8 symbols" : undefined}>
                 <Input
                   type="password"
-                  autoComplete={
-                    authMode === "bootstrap" ? "new-password" : "current-password"
-                  }
+                  autoComplete={isRegisterMode ? "new-password" : "current-password"}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   minLength={8}
@@ -136,8 +160,8 @@ export function AuthScreen() {
               >
                 {isSubmitting
                   ? "Processing..."
-                  : authMode === "bootstrap"
-                    ? "Create admin"
+                  : isRegisterMode
+                    ? "Create account"
                     : "Sign in"}
               </Button>
             </form>

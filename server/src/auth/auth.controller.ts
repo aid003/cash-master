@@ -13,8 +13,8 @@ import type { Response } from 'express';
 import { CurrentUser } from './current-user.decorator';
 import { AuthService } from './auth.service';
 import { AUTH_COOKIE_NAME } from './auth.constants';
-import { BootstrapDto } from './dto/bootstrap.dto';
 import { LoginDto } from './dto/login.dto';
+import { SignupDto } from './dto/signup.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import type { AuthenticatedUser } from './jwt.strategy';
 
@@ -22,17 +22,12 @@ import type { AuthenticatedUser } from './jwt.strategy';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Get('bootstrap-status')
-  bootstrapStatus() {
-    return this.authService.getBootstrapStatus();
-  }
-
-  @Post('bootstrap')
-  async bootstrap(
-    @Body() dto: BootstrapDto,
+  @Post('signup')
+  async signup(
+    @Body() dto: SignupDto,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const user = await this.authService.bootstrap(dto);
+    const user = await this.authService.signup(dto);
     const token = this.authService.signToken(user);
 
     this.setAuthCookie(response, token);
