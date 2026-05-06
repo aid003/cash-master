@@ -101,41 +101,6 @@ export class UndetectableApiService {
     return this.request<Record<string, never>>(`/profile/stop/${profileId}`);
   }
 
-  async getProfileCookies(profileId: string): Promise<UndetectableCookie[]> {
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= 4; attempt += 1) {
-      try {
-        const response = await this.request<
-          UndetectableCookie[] | { cookies?: UndetectableCookie[] } | Record<string, unknown>
-        >(`/profile/cookies/${profileId}`);
-
-        if (Array.isArray(response)) {
-          return response;
-        }
-
-        if (
-          response &&
-          typeof response === 'object' &&
-          'cookies' in response &&
-          Array.isArray(response.cookies)
-        ) {
-          return response.cookies;
-        }
-
-        return [];
-      } catch (error) {
-        lastError = error;
-        if (attempt === 4) {
-          break;
-        }
-
-        await this.sleep(1_000);
-      }
-    }
-
-    throw lastError;
-  }
-
   async getConnectionSettings(): Promise<UndetectableConnection> {
     return this.resolveConnection();
   }
@@ -352,7 +317,4 @@ export class UndetectableApiService {
     }
   }
 
-  private sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
 }

@@ -3,31 +3,42 @@ import puppeteer, { type Browser, type Page } from 'puppeteer';
 
 import {
   ActionExecutionError,
+  type ActionExecutionContext,
   type ActionStep,
   type AvitoActionResult,
-  type ActionExecutionContext,
   type AvitoActionRunner,
-  type LaunchAdsPayload,
-  type RefundActionPayload,
   type RunnerExecutionResult,
+  type WithdrawPayload,
 } from './profile-actions.types';
-import { type UndetectableCookie } from '../profiles/undetectable-api.service';
+
+type AvitoProfileInfoResponse = {
+  tiles?: Array<{
+    title?: unknown;
+    value?: unknown;
+    details?: unknown;
+  }>;
+};
+
+type BrowserHttpResult = {
+  ok: boolean;
+  status: number;
+  body: unknown;
+  text: string | null;
+  pageUrl: string;
+};
 
 @Injectable()
 export class AvitoActionRunnerService implements AvitoActionRunner {
-  private static readonly AVITO_WITHDRAW_URL = 'https://www.avito.ru/tariff/cpa/profile';
   private static readonly AVITO_BASE_URL = 'https://www.avito.ru/';
+  private static readonly AVITO_WITHDRAW_URL = 'https://www.avito.ru/tariff/cpa/profile';
+  private static readonly AVITO_ACCOUNT_STEP_URL = 'https://www.avito.ru/account/step1';
   private static readonly AVITO_ADVANCE_ACCOUNT_URL = 'https://www.avito.ru/account/advance';
-  private static readonly AVITO_ADVANCE_REFUND_URL =
-    'https://www.avito.ru/web/1/tariff/cpa/advance-refund';
-  private static readonly AVITO_CREATE_AND_PAY_URL =
-    'https://www.avito.ru/web/1/mnz/order/create-and-pay';
   private static readonly TIMEOUT_MS = 20_000;
+  private static readonly AUTO_TRANSFER_RESERVE_RUB = 1;
+  private static readonly NETWORK_SOURCE = 'browser';
   private readonly logger = new Logger(AvitoActionRunnerService.name);
 
-  async executeWithdraw(
-    context: ActionExecutionContext,
-  ): Promise<RunnerExecutionResult> {
+  async executeWithdraw(context: ActionExecutionContext): Promise<RunnerExecutionResult> {
     if (context.action.action !== 'disable_ads' && context.action.action !== 'withdraw') {
       throw this.createRunnerError(
         context,
@@ -47,227 +58,201 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
     return this.executeBrowserWithdraw(context);
   }
 
+  async executeLaunchAds(context: ActionExecutionContext): Promise<RunnerExecutionResult> {
+    return this.executeLaunchAdsBrowserFlow(context);
+  }
+
+  async executeTopUpWallet(context: ActionExecutionContext): Promise<RunnerExecutionResult> {
+    return this.buildStubResult(
+      context,
+      'TOP_UP_WALLET_STUB',
+      `Top up wallet flow is prepared for ${context.action.action === 'top_up_wallet' ? context.action.amount : 0} RUB but browser automation is not implemented yet.`,
+    );
+  }
+
   private async executeDisableAds(
     context: ActionExecutionContext,
   ): Promise<RunnerExecutionResult> {
-    const refundAction = this.getRefundAction(context, 'disable_ads');
+    this.ensureBrowserEndpoint(context, 'DISABLE_ADS_BROWSER_ENDPOINT_MISSING');
+
     const steps: ActionStep[] = [
-      this.createStep('refund_request_prepared', 'Preparing disable ads request-only flow'),
+      this.createStep('refund_request_prepared', 'Preparing disable ads browser-only flow'),
     ];
-    const amountRubles = refundAction.amount;
 
-    if (!Number.isInteger(amountRubles) || amountRubles <= 0) {
-      throw this.createRunnerError(
-        context,
-        'DISABLE_ADS_INVALID_AMOUNT',
-        'Refund amount in rubles must be a positive integer.',
-        {
-          profileId: context.profile.profileId,
-          amountRubles,
-        },
-        steps,
-      );
-    }
+    let browser: Browser | null = null;
+    try {
+      browser = await this.connectToProfileBrowser(context);
+      const page = await this.resolveAvitoTariffPage(browser, steps);
+      await page.bringToFront();
 
-    const amountKopeks = amountRubles * 100;
-    if (!Number.isSafeInteger(amountKopeks)) {
-      throw this.createRunnerError(
-        context,
-        'DISABLE_ADS_INVALID_AMOUNT',
-        'Refund amount in kopeks exceeds safe integer range.',
-        {
-          profileId: context.profile.profileId,
-          amountRubles,
-          amountKopeks,
-        },
-        steps,
-      );
-    }
-
-    steps.push(
-      this.createStep(
-        'avito_refund_amount_converted',
-        `Converted refund amount ${amountRubles} RUB to ${amountKopeks} kopeks`,
-      ),
-    );
-    const cookies = await this.getCookiesViaBrowser(context);
-    const avitoCookies = this.filterAvitoCookies(cookies);
-    if (!avitoCookies.length) {
-      steps.push(this.createStep('refund_auth_failed', 'No Avito cookies were found in profile'));
-      throw this.createRunnerError(
-        context,
-        'DISABLE_ADS_COOKIES_MISSING',
-        'Profile does not contain Avito cookies required for disable ads request.',
-        {
-          profileId: context.profile.profileId,
-          cookieCount: cookies.length,
-          avitoCookieCount: 0,
-        },
-        steps,
-      );
-    }
-
-    const cookieHeader = this.buildCookieHeader(avitoCookies);
-    if (!cookieHeader) {
-      steps.push(this.createStep('refund_auth_failed', 'Avito cookies could not be serialized'));
-      throw this.createRunnerError(
-        context,
-        'DISABLE_ADS_COOKIES_INVALID',
-        'Avito cookies could not be serialized into Cookie header.',
-        {
-          profileId: context.profile.profileId,
-          cookieCount: cookies.length,
-          avitoCookieCount: avitoCookies.length,
-        },
-        steps,
-      );
-    }
-
-    steps.push(
-      this.createStep(
-        'cookies_resolved',
-        `Resolved ${avitoCookies.length} Avito cookies for request-only flow via devtools`,
-      ),
-    );
-
-    this.logger.log({
-      message: 'Sending Avito advance refund request via cookies',
-      action: context.action.action,
-      jobId: context.job.id,
-      jobItemId: context.jobItem.id,
-      correlationId: context.correlationId,
-      profileId: context.profile.profileId,
-      amountRubles,
-      amountKopeks,
-      cookieCount: avitoCookies.length,
-    });
-    steps.push(this.createStep('refund_request_sent', 'Sending Avito advance refund HTTP request'));
-
-    const refundResponse = await this.postAdvanceRefundByCookies(
-      context,
-      amountKopeks,
-      cookieHeader,
-      avitoCookies,
-    );
-
-    this.logger.log({
-      message: 'Received Avito advance refund response via cookies',
-      action: context.action.action,
-      jobId: context.job.id,
-      jobItemId: context.jobItem.id,
-      correlationId: context.correlationId,
-      profileId: context.profile.profileId,
-      amountRubles,
-      amountKopeks,
-      httpStatus: refundResponse.status,
-      ok: refundResponse.ok,
-      responseJson: refundResponse.body,
-      responseText: refundResponse.text,
-    });
-    steps.push(
-      this.createStep(
-        'refund_request_completed',
-        `Avito refund endpoint responded with HTTP ${refundResponse.status}`,
-      ),
-    );
-
-    if (!refundResponse.ok) {
-      if (refundResponse.status === 401 || refundResponse.status === 403) {
-        steps.push(
-          this.createStep(
-            'refund_auth_failed',
-            `Avito rejected cookies with HTTP ${refundResponse.status}`,
-          ),
+      const profileInfo = await this.fetchProfileInfoInBrowser(context, page, steps);
+      const walletBalances = this.resolveBalancesFromProfileInfo(context, profileInfo.body, steps);
+      const amountRubles =
+        walletBalances.advanceRubles - AvitoActionRunnerService.AUTO_TRANSFER_RESERVE_RUB;
+      if (!Number.isInteger(amountRubles) || amountRubles <= 0) {
+        throw this.createRunnerError(
+          context,
+          'DISABLE_ADS_AUTO_AMOUNT_INVALID',
+          'Avito advance balance is too low to disable ads after reserving 1 RUB.',
+          {
+            profileId: context.profile.profileId,
+            advanceRubles: walletBalances.advanceRubles,
+            walletRubles: walletBalances.walletRubles,
+            reserveRubles: AvitoActionRunnerService.AUTO_TRANSFER_RESERVE_RUB,
+            profileInfoResponse: profileInfo.body,
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+          },
+          steps,
         );
       }
-      throw this.createRunnerError(
+
+      const amountKopeks = this.convertRublesToKopeks(
         context,
-        'DISABLE_ADS_REFUND_HTTP_ERROR',
-        `Avito refund request failed with HTTP ${refundResponse.status}.`,
-        {
-          profileId: context.profile.profileId,
-          amountRubles,
-          amountKopeks,
-          requestBody: { amount: amountKopeks },
-          httpStatus: refundResponse.status,
-          responseJson: refundResponse.body,
-          responseText: refundResponse.text,
-        },
+        amountRubles,
+        'DISABLE_ADS_INVALID_AMOUNT',
         steps,
       );
-    }
-
-    if (!this.isSuccessfulRefundResponse(refundResponse.body)) {
-      steps.push(this.createStep('refund_api_rejected', 'Avito did not confirm disable ads success'));
-      throw this.createRunnerError(
-        context,
-        'DISABLE_ADS_REFUND_API_REJECTED',
-        'Avito refund endpoint did not confirm success.',
-        {
-          profileId: context.profile.profileId,
-          amountRubles,
-          amountKopeks,
-          requestBody: { amount: amountKopeks },
-          httpStatus: refundResponse.status,
-          responseJson: refundResponse.body,
-          responseText: refundResponse.text,
-        },
-        steps,
+      steps.push(
+        this.createStep(
+          'auto_amount_calculated',
+          `Detected advance ${walletBalances.advanceRubles} RUB and computed refund ${amountRubles} RUB`,
+        ),
       );
-    }
 
-    return {
-      outcomeCode: 'DISABLE_ADS_COMPLETED',
-      message: `Disable ads flow moved ${amountRubles} RUB from advance to wallet.`,
-      runnerMode: 'undetectable',
-      rawResult: {
-        profileId: context.profile.profileId,
+      this.logBrowserRequest(context, 'Sending Avito advance refund request via browser context', {
         amountRubles,
         amountKopeks,
-        requestBody: { amount: amountKopeks },
-        httpStatus: refundResponse.status,
-        responseJson: refundResponse.body,
-        responseText: refundResponse.text,
-        cookieCount: avitoCookies.length,
-        cookieSource: 'devtools',
-      },
-      steps,
-    };
+      });
+      steps.push(
+        this.createStep('refund_request_sent', 'Sending Avito advance refund request via browser'),
+      );
+
+      await this.resolveAvitoTariffPage(browser, steps);
+      const refundResponse = await this.postAdvanceRefund(page, amountKopeks);
+      this.logBrowserResponse(
+        context,
+        'Received Avito advance refund response via browser context',
+        refundResponse,
+        { amountRubles, amountKopeks },
+      );
+      steps.push(
+        this.createStep(
+          'refund_request_completed',
+          `Avito refund endpoint responded with HTTP ${refundResponse.status} via browser`,
+        ),
+      );
+
+      if (!refundResponse.ok) {
+        if (refundResponse.status === 401 || refundResponse.status === 403) {
+          steps.push(
+            this.createStep(
+              'refund_auth_failed',
+              `Avito rejected browser session with HTTP ${refundResponse.status}`,
+            ),
+          );
+        }
+        throw this.createRunnerError(
+          context,
+          'DISABLE_ADS_REFUND_HTTP_ERROR',
+          `Avito refund request failed with HTTP ${refundResponse.status}.`,
+          {
+            profileId: context.profile.profileId,
+            amountRubles,
+            amountKopeks,
+            requestBody: { amount: amountKopeks },
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+            pageUrl: refundResponse.pageUrl,
+            httpStatus: refundResponse.status,
+            responseJson: refundResponse.body,
+            responseText: refundResponse.text,
+          },
+          steps,
+        );
+      }
+
+      if (!this.isSuccessfulRefundResponse(refundResponse.body)) {
+        steps.push(this.createStep('refund_api_rejected', 'Avito did not confirm disable ads success'));
+        throw this.createRunnerError(
+          context,
+          'DISABLE_ADS_REFUND_API_REJECTED',
+          'Avito refund endpoint did not confirm success.',
+          {
+            profileId: context.profile.profileId,
+            amountRubles,
+            amountKopeks,
+            requestBody: { amount: amountKopeks },
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+            pageUrl: refundResponse.pageUrl,
+            httpStatus: refundResponse.status,
+            responseJson: refundResponse.body,
+            responseText: refundResponse.text,
+          },
+          steps,
+        );
+      }
+
+      return {
+        outcomeCode: 'DISABLE_ADS_COMPLETED',
+        message: `Disable ads flow moved ${amountRubles} RUB from advance to wallet.`,
+        runnerMode: 'undetectable',
+        rawResult: {
+          profileId: context.profile.profileId,
+          walletRubles: walletBalances.walletRubles,
+          advanceRubles: walletBalances.advanceRubles,
+          amountRubles,
+          amountKopeks,
+          requestBody: { amount: amountKopeks },
+          profileInfoHttpStatus: profileInfo.status,
+          profileInfoResponseJson: profileInfo.body,
+          profileInfoResponseText: profileInfo.text,
+          httpStatus: refundResponse.status,
+          responseJson: refundResponse.body,
+          responseText: refundResponse.text,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+          pageUrl: refundResponse.pageUrl,
+        },
+        steps,
+      };
+    } catch (error) {
+      if (error instanceof ActionExecutionError) {
+        throw error;
+      }
+
+      throw this.createRunnerError(
+        context,
+        'DISABLE_ADS_EXECUTION_ERROR',
+        error instanceof Error ? error.message : 'Unknown disable ads automation error',
+        {
+          profileId: context.profile.profileId,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+          error:
+            error instanceof Error ? { name: error.name, message: error.message } : String(error),
+        },
+        steps,
+      );
+    } finally {
+      if (browser) {
+        await browser.disconnect();
+      }
+    }
   }
 
   private async executeBrowserWithdraw(
     context: ActionExecutionContext,
   ): Promise<RunnerExecutionResult> {
     const refundAction = this.getRefundAction(context, 'withdraw');
-    const actionLabel = 'withdraw';
-
-    if (!context.runtimeSnapshot.websocketLink && !context.runtimeSnapshot.debugPort) {
-      throw this.createRunnerError(
-        context,
-        'WITHDRAW_BROWSER_ENDPOINT_MISSING',
-        'Profile browser endpoint is missing, cannot connect to browser.',
-        {
-          action: context.action.action,
-          jobId: context.job.id,
-          jobItemId: context.jobItem.id,
-          correlationId: context.correlationId,
-          profileId: context.profile.profileId,
-          currentStatus: context.runtimeSnapshot.status,
-          debugPort: context.runtimeSnapshot.debugPort,
-          websocketLinkPresent: Boolean(context.runtimeSnapshot.websocketLink),
-        },
-      );
-    }
+    const steps: ActionStep[] = [
+      this.createStep('avito_navigation_started', 'Preparing withdraw browser-only flow'),
+    ];
+    this.ensureBrowserEndpoint(context, 'WITHDRAW_BROWSER_ENDPOINT_MISSING');
 
     let browser: Browser | null = null;
-    const steps: ActionStep[] = [this.createStep('avito_navigation_started', `Preparing ${actionLabel} browser flow`)];
     try {
       browser = await this.connectToProfileBrowser(context);
-
-      const page = await this.resolveAvitoRefundPage(browser, steps);
+      const page = await this.resolveAvitoTariffPage(browser, steps);
       await page.bringToFront();
-      const amountRubles = refundAction.amount;
 
+      const amountRubles = refundAction.amount;
       if (!Number.isInteger(amountRubles) || amountRubles <= 0) {
         throw this.createRunnerError(
           context,
@@ -276,6 +261,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
           await this.capturePageDiagnostics(page, {
             profileId: context.profile.profileId,
             amountRubles,
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
           }),
           steps,
         );
@@ -291,6 +277,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             profileId: context.profile.profileId,
             amountRubles,
             amountKopeks,
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
           }),
           steps,
         );
@@ -302,36 +289,22 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
           `Converted refund amount ${amountRubles} RUB to ${amountKopeks} kopeks`,
         ),
       );
-      this.logger.log({
-        message: 'Sending Avito advance refund request',
-        action: context.action.action,
-        jobId: context.job.id,
-        jobItemId: context.jobItem.id,
-        correlationId: context.correlationId,
-        profileId: context.profile.profileId,
-        amountRubles,
-        amountKopeks,
-      });
 
-      const refundResponse = await this.postAdvanceRefund(page, amountKopeks);
-      this.logger.log({
-        message: 'Received Avito advance refund response',
-        action: context.action.action,
-        jobId: context.job.id,
-        jobItemId: context.jobItem.id,
-        correlationId: context.correlationId,
-        profileId: context.profile.profileId,
+      this.logBrowserRequest(context, 'Sending Avito advance refund request via browser context', {
         amountRubles,
         amountKopeks,
-        httpStatus: refundResponse.status,
-        ok: refundResponse.ok,
-        responseJson: refundResponse.body,
-        responseText: refundResponse.text,
       });
+      const refundResponse = await this.postAdvanceRefund(page, amountKopeks);
+      this.logBrowserResponse(
+        context,
+        'Received Avito advance refund response via browser context',
+        refundResponse,
+        { amountRubles, amountKopeks },
+      );
       steps.push(
         this.createStep(
           'avito_refund_request_completed',
-          `Avito refund endpoint responded with HTTP ${refundResponse.status}`,
+          `Avito refund endpoint responded with HTTP ${refundResponse.status} via browser`,
         ),
       );
 
@@ -345,6 +318,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             amountRubles,
             amountKopeks,
             requestBody: { amount: amountKopeks },
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
             httpStatus: refundResponse.status,
             responseJson: refundResponse.body,
             responseText: refundResponse.text,
@@ -363,6 +337,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             amountRubles,
             amountKopeks,
             requestBody: { amount: amountKopeks },
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
             httpStatus: refundResponse.status,
             responseJson: refundResponse.body,
             responseText: refundResponse.text,
@@ -371,7 +346,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         );
       }
 
-      steps.push(this.createStep('avito_dom_ready', `Avito ${actionLabel} flow confirmed`));
+      steps.push(this.createStep('avito_dom_ready', 'Avito withdraw flow confirmed'));
       return {
         outcomeCode: 'WITHDRAW_COMPLETED',
         message: `Transferred ${amountRubles} RUB from advance to wallet.`,
@@ -381,6 +356,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
           amountRubles,
           amountKopeks,
           requestBody: { amount: amountKopeks },
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
           httpStatus: refundResponse.status,
           responseJson: refundResponse.body,
           responseText: refundResponse.text,
@@ -398,10 +374,9 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         error instanceof Error ? error.message : 'Unknown withdraw automation error',
         {
           profileId: context.profile.profileId,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
           error:
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : String(error),
+            error instanceof Error ? { name: error.name, message: error.message } : String(error),
         },
         steps,
       );
@@ -412,319 +387,78 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
     }
   }
 
-  async executeLaunchAds(
+  private async executeLaunchAdsBrowserFlow(
     context: ActionExecutionContext,
   ): Promise<RunnerExecutionResult> {
-    return this.executeLaunchAdsRequestFlow(context);
-
-    if (!context.runtimeSnapshot.websocketLink && !context.runtimeSnapshot.debugPort) {
-      throw this.createRunnerError(
-        context,
-        'LAUNCH_ADS_BROWSER_ENDPOINT_MISSING',
-        'Profile browser endpoint is missing, cannot connect to browser.',
-        {
-          action: context.action.action,
-          profileId: context.profile.profileId,
-          currentStatus: context.runtimeSnapshot.status,
-          debugPort: context.runtimeSnapshot.debugPort,
-          websocketLinkPresent: Boolean(context.runtimeSnapshot.websocketLink),
-        },
-      );
-    }
-
-    let browser: Browser | null = null;
-    const steps: ActionStep[] = [this.createStep('avito_navigation_started', 'Preparing launch ads browser flow')];
-    try {
-      browser = await this.connectToProfileBrowser(context);
-
-      const page = await this.resolveAvitoTopUpPage(browser as Browser, steps);
-      await page.bringToFront();
-
-      const balance = await this.readSidebarBalance(page);
-      if (!balance) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_BALANCE_NOT_FOUND',
-          'Could not read balance before top up flow.',
-          await this.capturePageDiagnostics(page, {
-            profileId: context.profile.profileId,
-          }),
-          steps,
-        );
-      }
-
-      const resolvedBalance = balance!;
-      const amountToTopUp = Math.floor(resolvedBalance.parsed) - 1;
-      if (amountToTopUp <= 0) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_AMOUNT_NON_POSITIVE',
-          'Top up amount is non-positive after applying balance - 1 rule.',
-          await this.capturePageDiagnostics(page, {
-            profileId: context.profile.profileId,
-            rawBalanceText: resolvedBalance.rawText,
-            parsedBalance: resolvedBalance.parsed,
-            amountToTopUp,
-          }),
-          steps,
-        );
-      }
-
-      await page.click('[data-marker="advanceButton"]');
-      await page.waitForSelector('[data-marker="amount/input"]', {
-        timeout: AvitoActionRunnerService.TIMEOUT_MS,
-      });
-      await this.fillInputWithNumber(page, '[data-marker="amount/input"]', amountToTopUp);
-
-      const selectedWallet = await page.evaluate(() => {
-        const variants = Array.from(
-          document.querySelectorAll<HTMLElement>('[data-marker="paymentVariant"]'),
-        );
-        const wallet = variants.find((variant) =>
-          (variant.textContent ?? '').toLowerCase().includes('кошел'),
-        );
-        if (!wallet) {
-          return false;
-        }
-        wallet.click();
-        return true;
-      });
-
-      if (!selectedWallet) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_PAYMENT_VARIANT_NOT_FOUND',
-          'Payment variant "Кошелёк" was not found.',
-          await this.capturePageDiagnostics(page, {
-            profileId: context.profile.profileId,
-            rawBalanceText: resolvedBalance.rawText,
-            parsedBalance: resolvedBalance.parsed,
-            amountToTopUp,
-          }),
-          steps,
-        );
-      }
-
-      await page.click('[data-marker="submit-btn"]');
-      await page.waitForSelector('[data-marker="payButton"]', {
-        timeout: AvitoActionRunnerService.TIMEOUT_MS,
-      });
-      await page.click('[data-marker="payButton"]');
-
-      const confirmationText = await this.waitForLaunchAdsConfirmation(page);
-      if (!confirmationText) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_CONFIRMATION_NOT_FOUND',
-          'Top up confirmations were clicked, but success confirmation was not found.',
-          await this.capturePageDiagnostics(page, {
-            profileId: context.profile.profileId,
-            rawBalanceText: resolvedBalance.rawText,
-            parsedBalance: resolvedBalance.parsed,
-            amountToTopUp,
-          }),
-          steps,
-        );
-      }
-
-      steps.push(this.createStep('avito_dom_ready', 'Avito launch ads flow confirmed'));
-      return {
-        outcomeCode: 'LAUNCH_ADS_COMPLETED',
-        message: `Transferred ${amountToTopUp} RUB from wallet to advance.`,
-        runnerMode: 'undetectable',
-        rawResult: await this.capturePageDiagnostics(page, {
-          profileId: context.profile.profileId,
-          rawBalanceText: resolvedBalance.rawText,
-          parsedBalance: resolvedBalance.parsed,
-          amountToTopUp,
-          confirmationText,
-          steps: {
-            clickedAdvanceButton: true,
-            selectedWalletVariant: true,
-            clickedSubmitBtn: true,
-            clickedPayButton: true,
-          },
-        }),
-        steps,
-      };
-    } catch (error: any) {
-      if (error instanceof ActionExecutionError) {
-        throw error;
-      }
-
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown launch ads automation error';
-      const errorDetails =
-        error instanceof Error
-          ? { name: error.name, message: error.message }
-          : String(error);
-
-      throw this.createRunnerError(
-        context,
-        'LAUNCH_ADS_EXECUTION_ERROR',
-        errorMessage,
-        {
-          profileId: context.profile.profileId,
-          error: errorDetails,
-        },
-        steps,
-      );
-    } finally {
-      if (browser) {
-        await browser!.disconnect();
-      }
-    }
-  }
-
-  async executeTopUpWallet(
-    context: ActionExecutionContext,
-  ): Promise<RunnerExecutionResult> {
-    return this.buildStubResult(
-      context,
-      'TOP_UP_WALLET_STUB',
-      `Top up wallet flow is prepared for ${context.action.action === 'top_up_wallet' ? context.action.amount : 0} RUB but browser automation is not implemented yet.`,
-    );
-  }
-
-  private async executeLaunchAdsRequestFlow(
-    context: ActionExecutionContext,
-  ): Promise<RunnerExecutionResult> {
-    const launchAdsAction = this.getLaunchAdsAction(context);
-    if (!context.runtimeSnapshot.websocketLink && !context.runtimeSnapshot.debugPort) {
-      throw this.createRunnerError(
-        context,
-        'LAUNCH_ADS_BROWSER_ENDPOINT_MISSING',
-        'Profile browser endpoint is missing, cannot connect to browser.',
-        {
-          action: context.action.action,
-          profileId: context.profile.profileId,
-          currentStatus: context.runtimeSnapshot.status,
-          debugPort: context.runtimeSnapshot.debugPort,
-          websocketLinkPresent: Boolean(context.runtimeSnapshot.websocketLink),
-        },
-      );
-    }
+    this.ensureBrowserEndpoint(context, 'LAUNCH_ADS_BROWSER_ENDPOINT_MISSING');
 
     const steps: ActionStep[] = [
-      this.createStep('launch_ads_request_prepared', 'Preparing launch ads request-only flow'),
+      this.createStep('launch_ads_request_prepared', 'Preparing launch ads browser-only flow'),
     ];
 
+    let browser: Browser | null = null;
     try {
-      const amountRubles = launchAdsAction.amount;
+      browser = await this.connectToProfileBrowser(context);
+      const page = await this.resolveAvitoTariffPage(browser, steps);
+      await page.bringToFront();
+
+      const profileInfo = await this.fetchProfileInfoInBrowser(context, page, steps);
+      const walletBalances = this.resolveBalancesFromProfileInfo(context, profileInfo.body, steps);
+      const amountRubles =
+        walletBalances.walletRubles - AvitoActionRunnerService.AUTO_TRANSFER_RESERVE_RUB;
       if (!Number.isInteger(amountRubles) || amountRubles <= 0) {
         throw this.createRunnerError(
           context,
-          'LAUNCH_ADS_INVALID_AMOUNT',
-          'Launch ads amount in rubles must be a positive integer.',
+          'LAUNCH_ADS_AUTO_AMOUNT_INVALID',
+          'Avito wallet balance is too low to launch ads after reserving 1 RUB.',
           {
             profileId: context.profile.profileId,
-            amountRubles,
+            walletRubles: walletBalances.walletRubles,
+            advanceRubles: walletBalances.advanceRubles,
+            reserveRubles: AvitoActionRunnerService.AUTO_TRANSFER_RESERVE_RUB,
+            profileInfoResponse: profileInfo.body,
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
           },
           steps,
         );
       }
 
-      const amountKopeks = amountRubles * 100;
-      if (!Number.isSafeInteger(amountKopeks)) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_INVALID_AMOUNT',
-          'Launch ads amount in kopeks exceeds safe integer range.',
-          {
-            profileId: context.profile.profileId,
-            amountRubles,
-            amountKopeks,
-          },
-          steps,
-        );
-      }
-
+      const amountKopeks = this.convertRublesToKopeks(
+        context,
+        amountRubles,
+        'LAUNCH_ADS_INVALID_AMOUNT',
+        steps,
+      );
       steps.push(
         this.createStep(
-          'launch_ads_amount_converted',
-          `Converted launch ads amount ${amountRubles} RUB to ${amountKopeks} kopeks`,
+          'auto_amount_calculated',
+          `Detected wallet ${walletBalances.walletRubles} RUB and computed launch ads amount ${amountRubles} RUB`,
         ),
       );
 
-      const cookies = await this.getCookiesViaBrowser(context);
-      const avitoCookies = this.filterAvitoCookies(cookies);
-      if (!avitoCookies.length) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_COOKIES_MISSING',
-          'Profile does not contain Avito cookies required for launch ads request.',
-          {
-            profileId: context.profile.profileId,
-            cookieCount: cookies.length,
-            avitoCookieCount: 0,
-          },
-          steps,
-        );
-      }
-
-      const cookieHeader = this.buildCookieHeader(avitoCookies);
-      if (!cookieHeader) {
-        throw this.createRunnerError(
-          context,
-          'LAUNCH_ADS_COOKIES_INVALID',
-          'Avito cookies could not be serialized into Cookie header.',
-          {
-            profileId: context.profile.profileId,
-            cookieCount: cookies.length,
-            avitoCookieCount: avitoCookies.length,
-          },
-          steps,
-        );
-      }
-
-      steps.push(
-        this.createStep(
-          'cookies_resolved',
-          `Resolved ${avitoCookies.length} Avito cookies for launch ads request`,
-        ),
-      );
-
-      this.logger.log({
-        message: 'Sending Avito create-and-pay request',
-        action: context.action.action,
-        jobId: context.job.id,
-        jobItemId: context.jobItem.id,
-        correlationId: context.correlationId,
-        profileId: context.profile.profileId,
+      await this.resolveAvitoAdvanceAccountPage(page, amountRubles, steps);
+      this.logBrowserRequest(context, 'Sending Avito create-and-pay request via browser context', {
         amountRubles,
         amountKopeks,
       });
       steps.push(
         this.createStep(
-          'launch_ads_order_request_sent',
-          'Sending Avito create-and-pay HTTP request',
+          'launch_ads_create_order_request_sent',
+          'Sending Avito create-and-pay request via browser',
         ),
       );
 
-      const createAndPayResponse = await this.postCreateAndPayByCookies(
-        amountKopeks,
-        cookieHeader,
-        avitoCookies,
+      const createAndPayResponse = await this.postCreateAndPayInBrowser(page, amountKopeks);
+      this.logBrowserResponse(
+        context,
+        'Received Avito create-and-pay response via browser context',
+        createAndPayResponse,
+        { amountRubles, amountKopeks },
       );
-
-      this.logger.log({
-        message: 'Received Avito create-and-pay response',
-        action: context.action.action,
-        jobId: context.job.id,
-        jobItemId: context.jobItem.id,
-        correlationId: context.correlationId,
-        profileId: context.profile.profileId,
-        amountRubles,
-        amountKopeks,
-        httpStatus: createAndPayResponse.status,
-        ok: createAndPayResponse.ok,
-        responseJson: createAndPayResponse.body,
-        responseText: createAndPayResponse.text,
-      });
       steps.push(
         this.createStep(
-          'launch_ads_order_request_completed',
-          `Avito create-and-pay endpoint responded with HTTP ${createAndPayResponse.status}`,
+          'launch_ads_create_order_request_completed',
+          `Avito create-and-pay endpoint responded with HTTP ${createAndPayResponse.status} via browser`,
         ),
       );
 
@@ -737,7 +471,9 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             profileId: context.profile.profileId,
             amountRubles,
             amountKopeks,
-            requestBody: this.buildLaunchAdsRequestBody(amountKopeks),
+            createOrderRequestBody: this.buildLaunchAdsRequestBody(amountKopeks),
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+            pageUrl: createAndPayResponse.pageUrl,
             httpStatus: createAndPayResponse.status,
             responseJson: createAndPayResponse.body,
             responseText: createAndPayResponse.text,
@@ -748,7 +484,7 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
 
       const redirectUrl = this.getLaunchAdsRedirectUrl(createAndPayResponse.body);
       const paymentPageId = this.extractPaymentPageId(redirectUrl);
-      if (!paymentPageId) {
+      if (!paymentPageId || !redirectUrl) {
         steps.push(
           this.createStep(
             'launch_ads_api_rejected',
@@ -763,7 +499,9 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             profileId: context.profile.profileId,
             amountRubles,
             amountKopeks,
-            requestBody: this.buildLaunchAdsRequestBody(amountKopeks),
+            createOrderRequestBody: this.buildLaunchAdsRequestBody(amountKopeks),
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+            pageUrl: createAndPayResponse.pageUrl,
             httpStatus: createAndPayResponse.status,
             responseJson: createAndPayResponse.body,
             responseText: createAndPayResponse.text,
@@ -772,15 +510,12 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         );
       }
 
-      this.logger.log({
-        message: 'Sending Avito payment page confirmation request',
-        action: context.action.action,
-        jobId: context.job.id,
-        jobItemId: context.jobItem.id,
-        correlationId: context.correlationId,
-        profileId: context.profile.profileId,
-        paymentPageId,
-      });
+      await this.resolveAvitoPaymentPage(page, redirectUrl, paymentPageId, steps);
+      this.logBrowserRequest(
+        context,
+        'Sending Avito payment page confirmation request via browser context',
+        { paymentPageId },
+      );
       steps.push(
         this.createStep(
           'launch_ads_payment_request_sent',
@@ -788,29 +523,17 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         ),
       );
 
-      const paymentResponse = await this.postLaunchAdsPaymentByCookies(
-        paymentPageId,
-        cookieHeader,
-        avitoCookies,
+      const paymentResponse = await this.postLaunchAdsPaymentInBrowser(page, paymentPageId);
+      this.logBrowserResponse(
+        context,
+        'Received Avito payment page confirmation response via browser context',
+        paymentResponse,
+        { paymentPageId },
       );
-
-      this.logger.log({
-        message: 'Received Avito payment page confirmation response',
-        action: context.action.action,
-        jobId: context.job.id,
-        jobItemId: context.jobItem.id,
-        correlationId: context.correlationId,
-        profileId: context.profile.profileId,
-        paymentPageId,
-        httpStatus: paymentResponse.status,
-        ok: paymentResponse.ok,
-        responseJson: paymentResponse.body,
-        responseText: paymentResponse.text,
-      });
       steps.push(
         this.createStep(
           'launch_ads_payment_request_completed',
-          `Avito payment endpoint responded with HTTP ${paymentResponse.status}`,
+          `Avito payment endpoint responded with HTTP ${paymentResponse.status} via browser`,
         ),
       );
 
@@ -825,6 +548,8 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
             amountKopeks,
             paymentPageId,
             requestBody: this.buildLaunchAdsPaymentRequestBody(),
+            networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+            pageUrl: paymentResponse.pageUrl,
             httpStatus: paymentResponse.status,
             responseJson: paymentResponse.body,
             responseText: paymentResponse.text,
@@ -839,6 +564,8 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         runnerMode: 'undetectable',
         rawResult: {
           profileId: context.profile.profileId,
+          walletRubles: walletBalances.walletRubles,
+          advanceRubles: walletBalances.advanceRubles,
           amountRubles,
           amountKopeks,
           createOrderRequestBody: this.buildLaunchAdsRequestBody(amountKopeks),
@@ -851,8 +578,11 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
           paymentHttpStatus: paymentResponse.status,
           paymentResponseJson: paymentResponse.body,
           paymentResponseText: paymentResponse.text,
-          cookieCount: avitoCookies.length,
-          cookieSource: 'devtools',
+          profileInfoHttpStatus: profileInfo.status,
+          profileInfoResponseJson: profileInfo.body,
+          profileInfoResponseText: profileInfo.text,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+          pageUrl: paymentResponse.pageUrl,
         },
         steps,
       };
@@ -867,13 +597,16 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         error instanceof Error ? error.message : 'Unknown launch ads automation error',
         {
           profileId: context.profile.profileId,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
           error:
-            error instanceof Error
-              ? { name: error.name, message: error.message }
-              : String(error),
+            error instanceof Error ? { name: error.name, message: error.message } : String(error),
         },
         steps,
       );
+    } finally {
+      if (browser) {
+        await browser.disconnect();
+      }
     }
   }
 
@@ -894,367 +627,13 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
         correlationId: context.correlationId,
         profileId: context.profile.profileId,
         amount: context.action.action === 'top_up_wallet' ? context.action.amount : null,
-        currency:
-          context.action.action === 'top_up_wallet' ? context.action.currency : null,
+        currency: context.action.action === 'top_up_wallet' ? context.action.currency : null,
       },
     };
   }
 
   private async resolveAvitoRefundPage(browser: Browser, steps?: ActionStep[]): Promise<Page> {
-    const pages = await browser.pages();
-    const existing = pages.find((page) =>
-      page.url().startsWith(AvitoActionRunnerService.AVITO_WITHDRAW_URL),
-    );
-    if (existing) {
-      await this.ensurePageReady(existing);
-      steps?.push(
-        this.createStep('avito_dom_ready', `Existing Avito page ready at ${existing.url()}`),
-      );
-      return existing;
-    }
-
-    const page = pages[0] ?? (await browser.newPage());
-    await this.ensurePageReady(page);
-    await page.goto(AvitoActionRunnerService.AVITO_WITHDRAW_URL, {
-      waitUntil: 'domcontentloaded',
-      timeout: AvitoActionRunnerService.TIMEOUT_MS,
-    });
-    await this.ensurePageReady(page);
-    steps?.push(
-      this.createStep('avito_dom_ready', `Avito tariff page ready at ${page.url()}`),
-    );
-    return page;
-  }
-
-  private async postAdvanceRefund(
-    page: Page,
-    amountKopeks: number,
-  ): Promise<{
-    ok: boolean;
-    status: number;
-    body: unknown;
-    text: string | null;
-  }> {
-    return page.evaluate(async (refundAmountKopeks) => {
-      const response = await fetch('/web/1/tariff/cpa/advance-refund', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          accept: 'application/json, text/plain, */*',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ amount: refundAmountKopeks }),
-      });
-
-      const text = await response.text();
-      let body: unknown = null;
-      if (text) {
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = null;
-        }
-      }
-
-      return {
-        ok: response.ok,
-        status: response.status,
-        body,
-        text: body === null ? text : null,
-      };
-    }, amountKopeks);
-  }
-
-  private async postAdvanceRefundByCookies(
-    context: ActionExecutionContext,
-    amountKopeks: number,
-    cookieHeader: string,
-    cookies: UndetectableCookie[],
-  ): Promise<{
-    ok: boolean;
-    status: number;
-    body: unknown;
-    text: string | null;
-  }> {
-    const headers = new Headers({
-      accept: 'application/json, text/plain, */*',
-      'content-type': 'application/json',
-      cookie: cookieHeader,
-      origin: 'https://www.avito.ru',
-      referer: AvitoActionRunnerService.AVITO_WITHDRAW_URL,
-    });
-    const userAgent = this.resolveUserAgent(cookies);
-    if (userAgent) {
-      headers.set('user-agent', userAgent);
-    }
-
-    const response = await fetch(AvitoActionRunnerService.AVITO_ADVANCE_REFUND_URL, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ amount: amountKopeks }),
-    });
-
-    const text = await response.text();
-    let body: unknown = null;
-    if (text) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = null;
-      }
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      body,
-      text: body === null ? text : null,
-    };
-  }
-
-  private buildLaunchAdsRequestBody(amountKopeks: number) {
-    return {
-      backURL: '/account?action=cpa',
-      items: [
-        {
-          cpaAdvance: amountKopeks,
-          serviceID: 104,
-          pageFrom: 'profile',
-        },
-      ],
-    };
-  }
-
-  private buildLaunchAdsPaymentRequestBody() {
-    return {
-      paymentMethodID: 7,
-      methodDetails: {
-        internalWallet: {
-          walletType: 'individual',
-        },
-      },
-    };
-  }
-
-  private async postCreateAndPayByCookies(
-    amountKopeks: number,
-    cookieHeader: string,
-    cookies: UndetectableCookie[],
-  ): Promise<{
-    ok: boolean;
-    status: number;
-    body: unknown;
-    text: string | null;
-  }> {
-    const headers = new Headers({
-      accept: 'application/json, text/plain, */*',
-      'content-type': 'application/json',
-      cookie: cookieHeader,
-      origin: 'https://www.avito.ru',
-      referer: `${AvitoActionRunnerService.AVITO_ADVANCE_ACCOUNT_URL}?amount=${Math.floor(amountKopeks / 100)}`,
-    });
-    const userAgent = this.resolveUserAgent(cookies);
-    if (userAgent) {
-      headers.set('user-agent', userAgent);
-    }
-
-    const response = await fetch(AvitoActionRunnerService.AVITO_CREATE_AND_PAY_URL, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(this.buildLaunchAdsRequestBody(amountKopeks)),
-    });
-
-    return this.parseHttpResponse(response);
-  }
-
-  private async postLaunchAdsPaymentByCookies(
-    paymentPageId: string,
-    cookieHeader: string,
-    cookies: UndetectableCookie[],
-  ): Promise<{
-    ok: boolean;
-    status: number;
-    body: unknown;
-    text: string | null;
-  }> {
-    const headers = new Headers({
-      accept: '*/*',
-      'content-type': 'application/json',
-      cookie: cookieHeader,
-      origin: 'https://www.avito.ru',
-      referer: `https://www.avito.ru/payment/page/${paymentPageId}?ps=1`,
-    });
-    const userAgent = this.resolveUserAgent(cookies);
-    if (userAgent) {
-      headers.set('user-agent', userAgent);
-    }
-
-    const response = await fetch(
-      `https://www.avito.ru/web/1/payment/page/${paymentPageId}/payment`,
-      {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(this.buildLaunchAdsPaymentRequestBody()),
-      },
-    );
-
-    return this.parseHttpResponse(response);
-  }
-
-  private async parseHttpResponse(response: Response): Promise<{
-    ok: boolean;
-    status: number;
-    body: unknown;
-    text: string | null;
-  }> {
-    const text = await response.text();
-    let body: unknown = null;
-    if (text) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = null;
-      }
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      body,
-      text: body === null ? text : null,
-    };
-  }
-
-  private isSuccessfulRefundResponse(body: unknown): boolean {
-    if (!body || typeof body !== 'object') {
-      return false;
-    }
-
-    const payload = body as {
-      status?: unknown;
-      result?: {
-        success?: unknown;
-      };
-    };
-
-    return payload.status === 'ok' || payload.result?.success === true;
-  }
-
-  private filterAvitoCookies(cookies: UndetectableCookie[]) {
-    return cookies.filter((cookie) => {
-      if (typeof cookie.name !== 'string' || typeof cookie.value !== 'string') {
-        return false;
-      }
-
-      const domain = cookie.domain?.toLowerCase() ?? '';
-      return domain === 'avito.ru' || domain.endsWith('.avito.ru');
-    });
-  }
-
-  private buildCookieHeader(cookies: UndetectableCookie[]) {
-    return cookies
-      .filter(
-        (cookie) =>
-          typeof cookie.name === 'string' &&
-          cookie.name.length > 0 &&
-          typeof cookie.value === 'string',
-      )
-      .map((cookie) => `${cookie.name}=${cookie.value}`)
-      .join('; ');
-  }
-
-  private resolveUserAgent(cookies: UndetectableCookie[]) {
-    const userAgentCookie = cookies.find((cookie) => cookie.name === 'user-agent');
-    return typeof userAgentCookie?.value === 'string' && userAgentCookie.value.length > 0
-      ? userAgentCookie.value
-      : null;
-  }
-
-  private getLaunchAdsRedirectUrl(body: unknown) {
-    if (!body || typeof body !== 'object') {
-      return null;
-    }
-
-    const payload = body as { redirectUrl?: unknown };
-    return typeof payload.redirectUrl === 'string' && payload.redirectUrl.length > 0
-      ? payload.redirectUrl
-      : null;
-  }
-
-  private extractPaymentPageId(redirectUrl: string | null) {
-    if (!redirectUrl) {
-      return null;
-    }
-
-    try {
-      const parsed = new URL(redirectUrl);
-      const match = parsed.pathname.match(/\/payment\/page\/([^/]+)/u);
-      return match?.[1] ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private getRefundAction(
-    context: ActionExecutionContext,
-    action: RefundActionPayload['action'],
-  ): RefundActionPayload {
-    if (context.action.action !== action) {
-      throw new Error(`Expected refund action ${action}, got ${context.action.action}`);
-    }
-
-    return context.action;
-  }
-
-  private getLaunchAdsAction(context: ActionExecutionContext): LaunchAdsPayload {
-    if (context.action.action !== 'launch_ads') {
-      throw new Error(`Expected launch_ads action, got ${context.action.action}`);
-    }
-
-    return context.action;
-  }
-
-  private async getCookiesViaBrowser(context: ActionExecutionContext): Promise<UndetectableCookie[]> {
-    if (!context.runtimeSnapshot.websocketLink && !context.runtimeSnapshot.debugPort) {
-      throw new Error('Browser endpoint is missing for DevTools cookie fallback');
-    }
-
-    this.logger.log({
-      message: 'Reading Avito cookies via DevTools',
-      correlationId: context.correlationId,
-      profileId: context.profile.profileId,
-    });
-
-    let browser: Browser | null = null;
-    try {
-      browser = await this.connectToProfileBrowser(context);
-      const pages = await browser.pages();
-      const page = pages[0] ?? (await browser.newPage());
-      const client = await page.target().createCDPSession();
-      const result = await client.send('Network.getCookies', {
-        urls: [
-          AvitoActionRunnerService.AVITO_BASE_URL,
-          AvitoActionRunnerService.AVITO_WITHDRAW_URL,
-        ],
-      });
-
-      return Array.isArray(result.cookies)
-        ? result.cookies.map((cookie) => ({
-            name: cookie.name,
-            value: cookie.value,
-            domain: cookie.domain,
-            path: cookie.path,
-            secure: cookie.secure,
-            httpOnly: cookie.httpOnly,
-            expires: cookie.expires,
-            sameSite: typeof cookie.sameSite === 'string' ? cookie.sameSite : undefined,
-          }))
-        : [];
-    } finally {
-      if (browser) {
-        await browser.disconnect();
-      }
-    }
+    return this.resolveAvitoTariffPage(browser, steps);
   }
 
   private async resolveAvitoTariffPage(browser: Browser, steps?: ActionStep[]): Promise<Page> {
@@ -1283,93 +662,377 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
     await page.waitForSelector('[data-marker="advanceMoreButton"]', {
       timeout: AvitoActionRunnerService.TIMEOUT_MS,
     });
-    steps?.push(
-      this.createStep('avito_dom_ready', `Avito tariff page ready at ${page.url()}`),
-    );
+    steps?.push(this.createStep('avito_dom_ready', `Avito tariff page ready at ${page.url()}`));
     return page;
   }
 
-  private parseRubAmount(value: string): number {
-    const amountToken = value.match(/\d+(?:[.,]\d+)?/u)?.[0] ?? '';
-    const normalized = amountToken.replace(',', '.');
-    const parsed = Number(normalized);
-    if (!Number.isFinite(parsed)) {
-      throw new Error(`Unable to parse amount from "${value}".`);
-    }
-    return parsed;
-  }
-
-  private async resolveAvitoTopUpPage(browser: Browser, steps?: ActionStep[]): Promise<Page> {
-    const page = await this.resolveAvitoTariffPage(browser, steps);
-    await page.waitForSelector('[data-marker="advanceButton"]', {
-      timeout: AvitoActionRunnerService.TIMEOUT_MS,
-    });
-    return page;
-  }
-
-  private async readSidebarBalance(page: Page): Promise<{
-    rawText: string;
-    parsed: number;
-  } | null> {
-    const rawBalanceText = await page.evaluate(() => {
-      const headings = Array.from(document.querySelectorAll('h5'));
-      const balanceHeading = headings.find((node) => {
-        const text = node.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-        return /\d+(?:[.,]\d+)?\s*₽/u.test(text);
+  private async resolveAvitoAccountStepPage(page: Page, steps?: ActionStep[]): Promise<void> {
+    if (!page.url().startsWith(AvitoActionRunnerService.AVITO_ACCOUNT_STEP_URL)) {
+      await page.goto(AvitoActionRunnerService.AVITO_ACCOUNT_STEP_URL, {
+        waitUntil: 'domcontentloaded',
+        timeout: AvitoActionRunnerService.TIMEOUT_MS,
       });
-      return balanceHeading?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+    }
+    await this.ensurePageReady(page);
+    steps?.push(this.createStep('avito_dom_ready', `Avito account page ready at ${page.url()}`));
+  }
+
+  private async resolveAvitoAdvanceAccountPage(
+    page: Page,
+    amountRubles: number,
+    steps?: ActionStep[],
+  ): Promise<void> {
+    const targetUrl = `${AvitoActionRunnerService.AVITO_ADVANCE_ACCOUNT_URL}?amount=${amountRubles}`;
+    if (!page.url().startsWith(AvitoActionRunnerService.AVITO_ADVANCE_ACCOUNT_URL)) {
+      await page.goto(targetUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: AvitoActionRunnerService.TIMEOUT_MS,
+      });
+    }
+    await this.ensurePageReady(page);
+    steps?.push(this.createStep('avito_dom_ready', `Avito advance page ready at ${page.url()}`));
+  }
+
+  private async resolveAvitoPaymentPage(
+    page: Page,
+    redirectUrl: string,
+    paymentPageId: string,
+    steps?: ActionStep[],
+  ): Promise<void> {
+    const targetUrl = new URL(redirectUrl, AvitoActionRunnerService.AVITO_BASE_URL).toString();
+    if (!page.url().includes(`/payment/page/${paymentPageId}`)) {
+      await page.goto(targetUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: AvitoActionRunnerService.TIMEOUT_MS,
+      });
+    }
+    await this.ensurePageReady(page);
+    steps?.push(this.createStep('avito_dom_ready', `Avito payment page ready at ${page.url()}`));
+  }
+
+  private async fetchProfileInfoInBrowser(
+    context: ActionExecutionContext,
+    page: Page,
+    steps: ActionStep[],
+  ): Promise<BrowserHttpResult> {
+    await this.resolveAvitoAccountStepPage(page, steps);
+    const profileInfo = await this.executeBrowserJsonRequest(page, '/web/2/profileinfo', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+      },
+      body: { isPro: true },
     });
 
-    if (!rawBalanceText) {
-      return null;
+    this.logBrowserResponse(
+      context,
+      'Received Avito profileinfo response via browser context',
+      profileInfo,
+    );
+
+    if (!profileInfo.ok) {
+      throw this.createRunnerError(
+        context,
+        'AVITO_PROFILEINFO_HTTP_ERROR',
+        `Avito profileinfo request failed with HTTP ${profileInfo.status}.`,
+        {
+          profileId: context.profile.profileId,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+          pageUrl: profileInfo.pageUrl,
+          httpStatus: profileInfo.status,
+          responseJson: profileInfo.body,
+          responseText: profileInfo.text,
+        },
+        steps,
+      );
     }
 
+    steps.push(
+      this.createStep(
+        'profileinfo_loaded',
+        `Avito profileinfo endpoint responded with HTTP ${profileInfo.status} via browser`,
+      ),
+    );
+    return profileInfo;
+  }
+
+  private async postAdvanceRefund(page: Page, amountKopeks: number): Promise<BrowserHttpResult> {
+    return this.executeBrowserJsonRequest(page, '/web/1/tariff/cpa/advance-refund', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+      },
+      body: { amount: amountKopeks },
+    });
+  }
+
+  private async postCreateAndPayInBrowser(
+    page: Page,
+    amountKopeks: number,
+  ): Promise<BrowserHttpResult> {
+    return this.executeBrowserJsonRequest(page, '/web/1/mnz/order/create-and-pay', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+      },
+      body: this.buildLaunchAdsRequestBody(amountKopeks),
+    });
+  }
+
+  private async postLaunchAdsPaymentInBrowser(
+    page: Page,
+    paymentPageId: string,
+  ): Promise<BrowserHttpResult> {
+    return this.executeBrowserJsonRequest(
+      page,
+      `/web/1/payment/page/${paymentPageId}/payment`,
+      {
+        method: 'POST',
+        headers: {
+          accept: '*/*',
+          'content-type': 'application/json',
+        },
+        body: this.buildLaunchAdsPaymentRequestBody(),
+      },
+    );
+  }
+
+  private buildLaunchAdsRequestBody(amountKopeks: number) {
     return {
-      rawText: rawBalanceText,
-      parsed: this.parseRubAmount(rawBalanceText),
+      backURL: '/account?action=cpa',
+      items: [
+        {
+          cpaAdvance: amountKopeks,
+          serviceID: 104,
+          pageFrom: 'profile',
+        },
+      ],
     };
   }
 
-  private async fillInputWithNumber(
-    page: Page,
-    selector: string,
-    value: number,
-  ): Promise<void> {
-    await page.click(selector, { clickCount: 3 });
-    await page.keyboard.press('Backspace');
-    await page.type(selector, String(value));
+  private buildLaunchAdsPaymentRequestBody() {
+    return {
+      paymentMethodID: 7,
+      methodDetails: {
+        internalWallet: {
+          walletType: 'individual',
+        },
+      },
+    };
   }
 
-  private async waitForLaunchAdsConfirmation(page: Page): Promise<string | null> {
+  private resolveBalancesFromProfileInfo(
+    context: ActionExecutionContext,
+    body: unknown,
+    steps: ActionStep[],
+  ) {
     try {
-      await page.waitForFunction(
-        () => {
-          const statuses = Array.from(document.querySelectorAll('[role="status"]'));
-          const hasStatus = statuses.some((node) =>
-            /(успеш|зачис|пополн|запущ)/iu.test(node.textContent ?? ''),
-          );
-          const payButton = document.querySelector('[data-marker="payButton"]');
-          return hasStatus || payButton === null;
-        },
-        {
-          timeout: AvitoActionRunnerService.TIMEOUT_MS,
-        },
+      const payload = body as AvitoProfileInfoResponse | null;
+      const tiles = Array.isArray(payload?.tiles) ? payload.tiles : null;
+      if (!tiles) {
+        throw new Error('Avito profileinfo response does not contain tiles.');
+      }
+
+      const walletTile = tiles.find((tile) => tile?.title === '\u041a\u043e\u0448\u0435\u043b\u0451\u043a');
+      const advanceTile = tiles.find((tile) => tile?.title === '\u0410\u0432\u0430\u043d\u0441');
+      if (!walletTile || !advanceTile) {
+        throw new Error('Avito profileinfo response does not contain wallet or advance tiles.');
+      }
+
+      const walletRubles = this.parseRublesFromTileValue(walletTile.value);
+      const advanceRubles = this.parseRublesFromTileValue(advanceTile.value);
+      steps.push(
+        this.createStep(
+          'profileinfo_balances_parsed',
+          `Parsed wallet ${walletRubles} RUB and advance ${advanceRubles} RUB from Avito profileinfo`,
+        ),
       );
-    } catch {
+      return { walletRubles, advanceRubles };
+    } catch (error) {
+      throw this.createRunnerError(
+        context,
+        'AVITO_PROFILEINFO_PARSE_ERROR',
+        error instanceof Error ? error.message : 'Failed to parse Avito profileinfo response.',
+        {
+          profileId: context.profile.profileId,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+          profileInfoResponse: body,
+        },
+        steps,
+      );
+    }
+  }
+
+  private parseRublesFromTileValue(value: unknown) {
+    if (typeof value !== 'string') {
+      throw new Error('Avito balance value is not a string.');
+    }
+
+    const normalized = value.replace(/[\s\u00A0\u202F\u20BD]/gu, '');
+    if (!/^\d+$/u.test(normalized)) {
+      throw new Error(`Avito balance value "${value}" could not be parsed as integer RUB.`);
+    }
+
+    return Number(normalized);
+  }
+
+  private convertRublesToKopeks(
+    context: ActionExecutionContext,
+    amountRubles: number,
+    outcomeCode: string,
+    steps: ActionStep[],
+  ) {
+    if (!Number.isInteger(amountRubles) || amountRubles <= 0) {
+      throw this.createRunnerError(
+        context,
+        outcomeCode,
+        'Action amount in rubles must be a positive integer.',
+        {
+          profileId: context.profile.profileId,
+          amountRubles,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+        },
+        steps,
+      );
+    }
+
+    const amountKopeks = amountRubles * 100;
+    if (!Number.isSafeInteger(amountKopeks)) {
+      throw this.createRunnerError(
+        context,
+        outcomeCode,
+        'Action amount in kopeks exceeds safe integer range.',
+        {
+          profileId: context.profile.profileId,
+          amountRubles,
+          amountKopeks,
+          networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+        },
+        steps,
+      );
+    }
+
+    steps.push(
+      this.createStep(
+        'amount_converted',
+        `Converted action amount ${amountRubles} RUB to ${amountKopeks} kopeks`,
+      ),
+    );
+    return amountKopeks;
+  }
+
+  private async executeBrowserJsonRequest(
+    page: Page,
+    input: string,
+    init: {
+      method: string;
+      headers?: Record<string, string>;
+      body?: unknown;
+    },
+  ): Promise<BrowserHttpResult> {
+    return page.evaluate(
+      async ({ requestInput, requestInit }) => {
+        const response = await fetch(requestInput, {
+          method: requestInit.method,
+          credentials: 'include',
+          headers: requestInit.headers,
+          body: requestInit.body === undefined ? undefined : JSON.stringify(requestInit.body),
+        });
+
+        const text = await response.text();
+        let body: unknown = null;
+        if (text) {
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = null;
+          }
+        }
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          body,
+          text: body === null ? text : null,
+          pageUrl: window.location.href,
+        };
+      },
+      {
+        requestInput: input,
+        requestInit: init,
+      },
+    );
+  }
+
+  private isSuccessfulRefundResponse(body: unknown): boolean {
+    if (!body || typeof body !== 'object') {
+      return false;
+    }
+
+    const payload = body as {
+      status?: unknown;
+      result?: {
+        success?: unknown;
+      };
+    };
+
+    return payload.status === 'ok' || payload.result?.success === true;
+  }
+
+  private getLaunchAdsRedirectUrl(body: unknown) {
+    if (!body || typeof body !== 'object') {
       return null;
     }
 
-    return page.evaluate(() => {
-      const statuses = Array.from(document.querySelectorAll('[role="status"]'));
-      const status = statuses.find((node) =>
-        /(успеш|зачис|пополн|запущ)/iu.test(node.textContent ?? ''),
-      );
-      if (status) {
-        return status.textContent?.replace(/\s+/g, ' ').trim() ?? null;
-      }
+    const payload = body as { redirectUrl?: unknown };
+    return typeof payload.redirectUrl === 'string' && payload.redirectUrl.length > 0
+      ? payload.redirectUrl
+      : null;
+  }
 
-      return 'Pay confirmation step completed';
-    });
+  private extractPaymentPageId(redirectUrl: string | null) {
+    if (!redirectUrl) {
+      return null;
+    }
+
+    try {
+      const parsed = new URL(redirectUrl, AvitoActionRunnerService.AVITO_BASE_URL);
+      const match = parsed.pathname.match(/\/payment\/page\/([^/]+)/u);
+      return match?.[1] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private getRefundAction(
+    context: ActionExecutionContext,
+    action: WithdrawPayload['action'],
+  ): WithdrawPayload {
+    if (context.action.action !== action) {
+      throw new Error(`Expected refund action ${action}, got ${context.action.action}`);
+    }
+
+    return context.action;
+  }
+
+  private ensureBrowserEndpoint(context: ActionExecutionContext, outcomeCode: string): void {
+    if (!context.runtimeSnapshot.websocketLink && !context.runtimeSnapshot.debugPort) {
+      throw this.createRunnerError(
+        context,
+        outcomeCode,
+        'Profile browser endpoint is missing, cannot connect to browser.',
+        {
+          action: context.action.action,
+          profileId: context.profile.profileId,
+          currentStatus: context.runtimeSnapshot.status,
+          debugPort: context.runtimeSnapshot.debugPort,
+          websocketLinkPresent: Boolean(context.runtimeSnapshot.websocketLink),
+        },
+      );
+    }
   }
 
   private async ensurePageReady(page: Page): Promise<void> {
@@ -1421,6 +1084,46 @@ export class AvitoActionRunnerService implements AvitoActionRunner {
       message,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private logBrowserRequest(
+    context: ActionExecutionContext,
+    message: string,
+    details: Record<string, unknown> = {},
+  ) {
+    this.logger.log({
+      message,
+      action: context.action.action,
+      jobId: context.job.id,
+      jobItemId: context.jobItem.id,
+      correlationId: context.correlationId,
+      profileId: context.profile.profileId,
+      networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+      ...details,
+    });
+  }
+
+  private logBrowserResponse(
+    context: ActionExecutionContext,
+    message: string,
+    result: BrowserHttpResult,
+    details: Record<string, unknown> = {},
+  ) {
+    this.logger.log({
+      message,
+      action: context.action.action,
+      jobId: context.job.id,
+      jobItemId: context.jobItem.id,
+      correlationId: context.correlationId,
+      profileId: context.profile.profileId,
+      networkSource: AvitoActionRunnerService.NETWORK_SOURCE,
+      pageUrl: result.pageUrl,
+      httpStatus: result.status,
+      ok: result.ok,
+      responseJson: result.body,
+      responseText: result.text,
+      ...details,
+    });
   }
 
   private async connectToProfileBrowser(context: ActionExecutionContext) {

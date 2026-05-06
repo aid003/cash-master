@@ -5,7 +5,9 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc --noEmit -p tsconfig.json",
+    "check": "npm run check:types && npm run check:avito-browser-only",
+    "check:types": "tsc --noEmit -p tsconfig.json",
+    "check:avito-browser-only": "node scripts/check-avito-browser-only.js",
     "dev": "ts-node --project tsconfig.json src/main.ts",
     "start": "node dist/main.js",
     "prisma:generate": "prisma generate",

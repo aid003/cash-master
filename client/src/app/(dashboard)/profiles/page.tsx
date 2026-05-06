@@ -165,14 +165,6 @@ export default function ProfilesPage() {
     id: string;
     name: string;
   } | null>(null);
-  const [disableAdsTarget, setDisableAdsTarget] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
-  const [launchAdsTarget, setLaunchAdsTarget] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
 
   const visibleProfiles = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
@@ -419,16 +411,10 @@ export default function ProfilesPage() {
                         mode="compact"
                         disabled={isMutating || selectedProfile.isMissing}
                         onDisableAds={() =>
-                          setDisableAdsTarget({
-                            id: selectedProfile.id,
-                            name: selectedProfile.name,
-                          })
+                          disableAdsProfileAction(selectedProfile.id, selectedProfile.name)
                         }
                         onLaunchAds={() =>
-                          setLaunchAdsTarget({
-                            id: selectedProfile.id,
-                            name: selectedProfile.name,
-                          })
+                          launchAdsProfileAction(selectedProfile.id, selectedProfile.name)
                         }
                         onTopUpWallet={() =>
                           setTopUpTarget({
@@ -552,59 +538,6 @@ export default function ProfilesPage() {
         }}
       />
 
-      <TopUpWalletDialog
-        open={Boolean(disableAdsTarget)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDisableAdsTarget(null);
-          }
-        }}
-        isBusy={isMutating}
-        scope="profile"
-        targetLabel={disableAdsTarget?.name ?? ""}
-        title="Отключить рекламу"
-        description={
-          disableAdsTarget
-            ? `Укажите сумму в рублях для профиля «${disableAdsTarget.name}». Средства будут переведены из аванса в кошелек Avito.`
-            : "Укажите сумму в рублях."
-        }
-        placeholder="Например, 1000"
-        submitLabel="Создать задачу"
-        onSubmit={async (amount) => {
-          if (!disableAdsTarget) {
-            return;
-          }
-
-          await disableAdsProfileAction(disableAdsTarget.id, disableAdsTarget.name, amount);
-        }}
-      />
-
-      <TopUpWalletDialog
-        open={Boolean(launchAdsTarget)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setLaunchAdsTarget(null);
-          }
-        }}
-        isBusy={isMutating}
-        scope="profile"
-        targetLabel={launchAdsTarget?.name ?? ""}
-        title="Запустить рекламу"
-        description={
-          launchAdsTarget
-            ? `Укажите сумму в рублях для профиля «${launchAdsTarget.name}». Эта сумма будет использована для запуска рекламы.`
-            : "Укажите сумму в рублях."
-        }
-        placeholder="Например, 1000"
-        submitLabel="Создать задачу"
-        onSubmit={async (amount) => {
-          if (!launchAdsTarget) {
-            return;
-          }
-
-          await launchAdsProfileAction(launchAdsTarget.id, launchAdsTarget.name, amount);
-        }}
-      />
     </>
   );
 }

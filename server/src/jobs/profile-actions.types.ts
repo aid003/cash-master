@@ -37,16 +37,22 @@ export type TopUpWalletPayload = BaseActionPayload & {
   currency: 'RUB';
 };
 
-export type RefundActionPayload = BaseActionPayload & {
-  action: 'disable_ads' | 'withdraw';
+export type DisableAdsPayload = BaseActionPayload & {
+  action: 'disable_ads';
+  amount?: number;
+  currency?: 'RUB';
+};
+
+export type WithdrawPayload = BaseActionPayload & {
+  action: 'withdraw';
   amount: number;
   currency: 'RUB';
 };
 
 export type LaunchAdsPayload = BaseActionPayload & {
   action: 'launch_ads';
-  amount: number;
-  currency: 'RUB';
+  amount?: number;
+  currency?: 'RUB';
 };
 
 export type BasicActionPayload = BaseActionPayload & {
@@ -55,7 +61,8 @@ export type BasicActionPayload = BaseActionPayload & {
 
 export type AvitoActionPayload =
   | BasicActionPayload
-  | RefundActionPayload
+  | DisableAdsPayload
+  | WithdrawPayload
   | LaunchAdsPayload
   | TopUpWalletPayload;
 

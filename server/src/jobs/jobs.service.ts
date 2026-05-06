@@ -339,10 +339,7 @@ export class JobsService {
 
   private validateActionInput(action: ProfileActionType, options: CreateActionOptions) {
     if (
-      (action === 'top_up_wallet' ||
-        action === 'disable_ads' ||
-        action === 'withdraw' ||
-        action === 'launch_ads') &&
+      (action === 'top_up_wallet' || action === 'withdraw') &&
       !(typeof options.amount === 'number' && Number.isInteger(options.amount) && options.amount > 0)
     ) {
       throw new ConflictException(`${this.getActionVerb(action)} amount must be a positive integer`);
@@ -363,24 +360,27 @@ export class JobsService {
       profileRecordId: input.profileRecordId,
     };
 
-    if (
-      input.action === 'top_up_wallet' ||
-      input.action === 'launch_ads' ||
-      input.action === 'disable_ads' ||
-      input.action === 'withdraw'
-    ) {
-      return {
-        ...basePayload,
-        action: input.action,
-        amount: input.options?.amount ?? 0,
-        currency: 'RUB',
-      };
+    switch (input.action) {
+      case 'top_up_wallet':
+      case 'withdraw':
+        return {
+          ...basePayload,
+          action: input.action,
+          amount: input.options?.amount ?? 0,
+          currency: 'RUB',
+        };
+      case 'disable_ads':
+      case 'launch_ads':
+        return {
+          ...basePayload,
+          action: input.action,
+        };
+      default:
+        return {
+          ...basePayload,
+          action: input.action,
+        };
     }
-
-    return {
-      ...basePayload,
-      action: input.action,
-    };
   }
 
   private getActionVerb(action: ProfileActionType) {

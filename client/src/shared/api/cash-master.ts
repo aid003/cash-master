@@ -260,17 +260,15 @@ export async function withdrawProfile(profileRecordId: string, amount: number) {
   });
 }
 
-export async function disableAdsProfile(profileRecordId: string, amount: number) {
+export async function disableAdsProfile(profileRecordId: string) {
   return request<Job>(`/profiles/${profileRecordId}/disable-ads`, {
     method: "POST",
-    bodyJson: { amount },
   });
 }
 
-export async function launchAdsProfile(profileRecordId: string, amount: number) {
+export async function launchAdsProfile(profileRecordId: string) {
   return request<Job>(`/profiles/${profileRecordId}/launch-ads`, {
     method: "POST",
-    bodyJson: { amount },
   });
 }
 
@@ -304,17 +302,15 @@ export async function withdrawProjectProfiles(projectId: string, amount: number)
   });
 }
 
-export async function disableAdsProjectProfiles(projectId: string, amount: number) {
+export async function disableAdsProjectProfiles(projectId: string) {
   return request<Job>(`/jobs/projects/${projectId}/disable-ads`, {
     method: "POST",
-    bodyJson: { amount },
   });
 }
 
-export async function launchAdsProjectProfiles(projectId: string, amount: number) {
+export async function launchAdsProjectProfiles(projectId: string) {
   return request<Job>(`/jobs/projects/${projectId}/launch-ads`, {
     method: "POST",
-    bodyJson: { amount },
   });
 }
 

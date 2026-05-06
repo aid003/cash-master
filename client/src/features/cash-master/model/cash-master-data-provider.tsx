@@ -65,12 +65,10 @@ type CashMasterDataContextValue = {
   disableAdsProfileAction: (
     profileId: string,
     profileName: string,
-    amount: number,
   ) => Promise<void>;
   launchAdsProfileAction: (
     profileId: string,
     profileName: string,
-    amount: number,
   ) => Promise<void>;
   topUpWalletProfileAction: (
     profileId: string,
@@ -78,8 +76,8 @@ type CashMasterDataContextValue = {
     amount: number,
   ) => Promise<void>;
   startProfileAction: (profileId: string, profileName: string) => Promise<void>;
-  disableAdsSelectedProjectAction: (amount: number) => Promise<void>;
-  launchAdsSelectedProjectAction: (amount: number) => Promise<void>;
+  disableAdsSelectedProjectAction: () => Promise<void>;
+  launchAdsSelectedProjectAction: () => Promise<void>;
   topUpWalletSelectedProjectAction: (amount: number) => Promise<void>;
   startSelectedProjectProfilesAction: () => Promise<void>;
   stopProfileAction: (profileId: string, profileName: string) => Promise<void>;
@@ -241,17 +239,17 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
       );
     },
     selectProject: (projectId) => setSelectedProjectId(projectId),
-    disableAdsProfileAction: async (profileId, profileName, amount) => {
+    disableAdsProfileAction: async (profileId, profileName) => {
       await runAction(
-        () => disableAdsProfile(profileId, amount),
+        () => disableAdsProfile(profileId),
         `Создаю задачу «Отключить рекламу» для ${profileName}...`,
         `Задача «Отключить рекламу» создана для ${profileName}`,
         { shouldRefreshSelectedProject: true },
       );
     },
-    launchAdsProfileAction: async (profileId, profileName, amount) => {
+    launchAdsProfileAction: async (profileId, profileName) => {
       await runAction(
-        () => launchAdsProfile(profileId, amount),
+        () => launchAdsProfile(profileId),
         `Создаю задачу «Запустить рекламу» для ${profileName}...`,
         `Задача «Запустить рекламу» создана для ${profileName}`,
         { shouldRefreshSelectedProject: true },
@@ -273,25 +271,25 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
         { shouldRefreshSelectedProject: true },
       );
     },
-    disableAdsSelectedProjectAction: async (amount) => {
+    disableAdsSelectedProjectAction: async () => {
       if (!selectedProject) {
         return;
       }
 
       await runAction(
-        () => disableAdsProjectProfiles(selectedProject.id, amount),
+        () => disableAdsProjectProfiles(selectedProject.id),
         `Создаю задачу «Отключить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Отключить рекламу» создана для проекта ${selectedProject.name}`,
         { shouldRefreshSelectedProject: true },
       );
     },
-    launchAdsSelectedProjectAction: async (amount) => {
+    launchAdsSelectedProjectAction: async () => {
       if (!selectedProject) {
         return;
       }
 
       await runAction(
-        () => launchAdsProjectProfiles(selectedProject.id, amount),
+        () => launchAdsProjectProfiles(selectedProject.id),
         `Создаю задачу «Запустить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Запустить рекламу» создана для проекта ${selectedProject.name}`,
         { shouldRefreshSelectedProject: true },
