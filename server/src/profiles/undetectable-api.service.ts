@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import type { AppConfig } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
+import { inspect } from 'node:util';
 
 import { PrismaService } from '../database/prisma.service';
 
@@ -53,6 +54,17 @@ type StartProfileOptions = {
   chromeFlags?: string;
 };
 
+export type UndetectableCookie = {
+  name?: string;
+  value?: string;
+  domain?: string;
+  path?: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  expires?: number;
+  sameSite?: string;
+};
+
 const APP_CONFIG_ID = 1;
 
 @Injectable()
@@ -87,6 +99,41 @@ export class UndetectableApiService {
 
   async stopProfile(profileId: string): Promise<Record<string, never>> {
     return this.request<Record<string, never>>(`/profile/stop/${profileId}`);
+  }
+
+  async getProfileCookies(profileId: string): Promise<UndetectableCookie[]> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      try {
+        const response = await this.request<
+          UndetectableCookie[] | { cookies?: UndetectableCookie[] } | Record<string, unknown>
+        >(`/profile/cookies/${profileId}`);
+
+        if (Array.isArray(response)) {
+          return response;
+        }
+
+        if (
+          response &&
+          typeof response === 'object' &&
+          'cookies' in response &&
+          Array.isArray(response.cookies)
+        ) {
+          return response.cookies;
+        }
+
+        return [];
+      } catch (error) {
+        lastError = error;
+        if (attempt === 4) {
+          break;
+        }
+
+        await this.sleep(1_000);
+      }
+    }
+
+    throw lastError;
   }
 
   async getConnectionSettings(): Promise<UndetectableConnection> {
@@ -189,7 +236,7 @@ export class UndetectableApiService {
         'error' in payload.data &&
         typeof payload.data.error === 'string'
           ? payload.data.error
-          : 'Unknown Undetectable API error';
+          : `Unknown Undetectable API error: ${this.serializePayloadData(payload.data)}`;
 
       if (persistFailure && connection.source === 'db') {
         await this.storeConnectionCheckResult(connection, false, 0, message);
@@ -295,5 +342,17 @@ export class UndetectableApiService {
 
   private formatFetchError(error: unknown) {
     return error instanceof Error ? error.message : 'unknown error';
+  }
+
+  private serializePayloadData(data: unknown) {
+    try {
+      return inspect(data, { depth: 4, breakLength: 120 });
+    } catch {
+      return 'unserializable payload';
+    }
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

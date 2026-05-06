@@ -67,7 +67,11 @@ type CashMasterDataContextValue = {
     profileName: string,
     amount: number,
   ) => Promise<void>;
-  launchAdsProfileAction: (profileId: string, profileName: string) => Promise<void>;
+  launchAdsProfileAction: (
+    profileId: string,
+    profileName: string,
+    amount: number,
+  ) => Promise<void>;
   topUpWalletProfileAction: (
     profileId: string,
     profileName: string,
@@ -75,7 +79,7 @@ type CashMasterDataContextValue = {
   ) => Promise<void>;
   startProfileAction: (profileId: string, profileName: string) => Promise<void>;
   disableAdsSelectedProjectAction: (amount: number) => Promise<void>;
-  launchAdsSelectedProjectAction: () => Promise<void>;
+  launchAdsSelectedProjectAction: (amount: number) => Promise<void>;
   topUpWalletSelectedProjectAction: (amount: number) => Promise<void>;
   startSelectedProjectProfilesAction: () => Promise<void>;
   stopProfileAction: (profileId: string, profileName: string) => Promise<void>;
@@ -245,9 +249,9 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
         { shouldRefreshSelectedProject: true },
       );
     },
-    launchAdsProfileAction: async (profileId, profileName) => {
+    launchAdsProfileAction: async (profileId, profileName, amount) => {
       await runAction(
-        () => launchAdsProfile(profileId),
+        () => launchAdsProfile(profileId, amount),
         `Создаю задачу «Запустить рекламу» для ${profileName}...`,
         `Задача «Запустить рекламу» создана для ${profileName}`,
         { shouldRefreshSelectedProject: true },
@@ -281,13 +285,13 @@ export function CashMasterDataProvider({ children }: { children: ReactNode }) {
         { shouldRefreshSelectedProject: true },
       );
     },
-    launchAdsSelectedProjectAction: async () => {
+    launchAdsSelectedProjectAction: async (amount) => {
       if (!selectedProject) {
         return;
       }
 
       await runAction(
-        () => launchAdsProjectProfiles(selectedProject.id),
+        () => launchAdsProjectProfiles(selectedProject.id, amount),
         `Создаю задачу «Запустить рекламу» для проекта ${selectedProject.name}...`,
         `Задача «Запустить рекламу» создана для проекта ${selectedProject.name}`,
         { shouldRefreshSelectedProject: true },

@@ -101,9 +101,10 @@ export class ProfilesController {
   @Post(':profileRecordId/launch-ads')
   launchAds(
     @Param('profileRecordId') profileRecordId: string,
+    @Body() dto: ExecuteProfileActionDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.jobsService.createSingleProfileJob(profileRecordId, 'launch_ads', user.id);
+    return this.jobsService.createSingleProfileJob(profileRecordId, 'launch_ads', user.id, dto);
   }
 
   @Post(':profileRecordId/top-up-wallet')

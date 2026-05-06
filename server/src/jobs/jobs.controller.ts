@@ -65,9 +65,10 @@ export class JobsController {
   @Post('projects/:projectId/launch-ads')
   launchAdsProject(
     @Param('projectId') projectId: string,
+    @Body() dto: ExecuteProjectActionDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.jobsService.createProjectJob(projectId, 'launch_ads', user.id);
+    return this.jobsService.createProjectJob(projectId, 'launch_ads', user.id, dto);
   }
 
   @Post('projects/:projectId/top-up-wallet')

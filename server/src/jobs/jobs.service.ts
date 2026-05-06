@@ -339,7 +339,10 @@ export class JobsService {
 
   private validateActionInput(action: ProfileActionType, options: CreateActionOptions) {
     if (
-      (action === 'top_up_wallet' || action === 'disable_ads' || action === 'withdraw') &&
+      (action === 'top_up_wallet' ||
+        action === 'disable_ads' ||
+        action === 'withdraw' ||
+        action === 'launch_ads') &&
       !(typeof options.amount === 'number' && Number.isInteger(options.amount) && options.amount > 0)
     ) {
       throw new ConflictException(`${this.getActionVerb(action)} amount must be a positive integer`);
@@ -362,6 +365,7 @@ export class JobsService {
 
     if (
       input.action === 'top_up_wallet' ||
+      input.action === 'launch_ads' ||
       input.action === 'disable_ads' ||
       input.action === 'withdraw'
     ) {

@@ -29,9 +29,7 @@ export function BusinessActions({
       className={cn(
         "grid gap-2",
         compact
-          ? showTopUpWallet
-            ? "sm:grid-cols-3"
-            : "sm:grid-cols-2"
+          ? "grid-cols-1"
           : showTopUpWallet
             ? "grid-cols-1"
             : "grid-cols-1",

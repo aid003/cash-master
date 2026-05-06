@@ -204,6 +204,7 @@ export default function ProjectsPage() {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isProfilesOpen, setIsProfilesOpen] = useState(false);
   const [isDisableAdsOpen, setIsDisableAdsOpen] = useState(false);
+  const [isLaunchAdsOpen, setIsLaunchAdsOpen] = useState(false);
   const [createForm, setCreateForm] = useState(emptyProjectForm);
   const [editForm, setEditForm] = useState(emptyProjectForm);
   const [availableProfilesSearch, setAvailableProfilesSearch] = useState("");
@@ -384,7 +385,7 @@ export default function ProjectsPage() {
                     showTopUpWallet={false}
                     disabled={projectActionDisabled}
                     onDisableAds={() => setIsDisableAdsOpen(true)}
-                    onLaunchAds={() => void launchAdsSelectedProjectAction()}
+                    onLaunchAds={() => setIsLaunchAdsOpen(true)}
                     onTopUpWallet={() => undefined}
                   />
                   <div className="grid grid-cols-2 gap-2">
@@ -474,6 +475,25 @@ export default function ProjectsPage() {
         submitLabel="Создать задачу"
         onSubmit={async (amount) => {
           await disableAdsSelectedProjectAction(amount);
+        }}
+      />
+
+      <TopUpWalletDialog
+        open={isLaunchAdsOpen}
+        onOpenChange={setIsLaunchAdsOpen}
+        isBusy={isMutating}
+        scope="project"
+        targetLabel={selectedProject?.name ?? ""}
+        title="Запустить рекламу"
+        description={
+          selectedProject
+            ? `Укажите сумму в рублях для проекта «${selectedProject.name}». Эта сумма будет применена к каждому доступному профилю проекта для запуска рекламы.`
+            : "Укажите сумму в рублях."
+        }
+        placeholder="Например, 1000"
+        submitLabel="Создать задачу"
+        onSubmit={async (amount) => {
+          await launchAdsSelectedProjectAction(amount);
         }}
       />
 

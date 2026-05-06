@@ -267,9 +267,10 @@ export async function disableAdsProfile(profileRecordId: string, amount: number)
   });
 }
 
-export async function launchAdsProfile(profileRecordId: string) {
+export async function launchAdsProfile(profileRecordId: string, amount: number) {
   return request<Job>(`/profiles/${profileRecordId}/launch-ads`, {
     method: "POST",
+    bodyJson: { amount },
   });
 }
 
@@ -310,9 +311,10 @@ export async function disableAdsProjectProfiles(projectId: string, amount: numbe
   });
 }
 
-export async function launchAdsProjectProfiles(projectId: string) {
+export async function launchAdsProjectProfiles(projectId: string, amount: number) {
   return request<Job>(`/jobs/projects/${projectId}/launch-ads`, {
     method: "POST",
+    bodyJson: { amount },
   });
 }
 

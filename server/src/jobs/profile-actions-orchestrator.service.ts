@@ -50,7 +50,9 @@ export class ProfileActionsOrchestratorService {
         steps.push(
           this.createStep(
             'auto_start_requested',
-            'Starting profile in headless mode before Avito action',
+            this.requiresBrowserSession(context)
+              ? 'Starting profile in headless mode before Avito action'
+              : 'Starting profile before request-only Avito action',
           ),
         );
         const startResult = await this.undetectableApiService.startProfile(context.profile.profileId, {
@@ -97,27 +99,45 @@ export class ProfileActionsOrchestratorService {
         steps.push(
           this.createStep(
             'auto_start_completed',
-            `Profile start returned debug_port=${startResult.debug_port || 'empty'} websocket_link=${startResult.websocket_link ? 'present' : 'empty'} chrome_flags=${ProfileActionsOrchestratorService.AVITO_HEADLESS_CHROME_FLAGS}`,
+            this.requiresBrowserSession(context)
+              ? `Profile start returned debug_port=${startResult.debug_port || 'empty'} websocket_link=${startResult.websocket_link ? 'present' : 'empty'} chrome_flags=${ProfileActionsOrchestratorService.AVITO_HEADLESS_CHROME_FLAGS}`
+              : `Profile start returned debug_port=${startResult.debug_port || 'empty'} websocket_link=${startResult.websocket_link ? 'present' : 'empty'}`,
           ),
         );
       } else {
-        steps.push(this.createStep('existing_session_reused', 'Using existing browser session'));
+        steps.push(
+          this.createStep(
+            'existing_session_reused',
+            this.requiresBrowserSession(context)
+              ? 'Using existing browser session'
+              : 'Using existing started profile for request-only action',
+          ),
+        );
       }
 
-      steps.push(
-        this.createStep(
-          'browser_ready_wait_started',
-          'Waiting for browser websocket and page readiness',
-        ),
-      );
-      const readiness = await this.waitForBrowserReady(context);
-      browserReadyConfirmed = true;
-      steps.push(
-        this.createStep(
-          'browser_ready_confirmed',
-          `Browser ready at ${readiness.activePageUrl} with ${readiness.pageCount} page(s)`,
-        ),
-      );
+      if (this.requiresBrowserSession(context)) {
+        steps.push(
+          this.createStep(
+            'browser_ready_wait_started',
+            'Waiting for browser websocket and page readiness',
+          ),
+        );
+        const readiness = await this.waitForBrowserReady(context);
+        browserReadyConfirmed = true;
+        steps.push(
+          this.createStep(
+            'browser_ready_confirmed',
+            `Browser ready at ${readiness.activePageUrl} with ${readiness.pageCount} page(s)`,
+          ),
+        );
+      } else {
+        steps.push(
+          this.createStep(
+            'request_only_profile_ready',
+            'Browser readiness check skipped for request-only disable ads flow',
+          ),
+        );
+      }
 
       const runnerResult = await this.executeRunner(context);
       steps.push(...(runnerResult.steps ?? []));
@@ -151,7 +171,7 @@ export class ProfileActionsOrchestratorService {
             );
       throw executionError;
     } finally {
-      if (startedByOrchestrator && browserReadyConfirmed) {
+      if (startedByOrchestrator && (browserReadyConfirmed || !this.requiresBrowserSession(context))) {
         try {
           steps.push(this.createStep('auto_stop_requested', 'Stopping profile after Avito action'));
           await this.undetectableApiService.stopProfile(context.profile.profileId);
@@ -283,6 +303,7 @@ export class ProfileActionsOrchestratorService {
 
     if (
       (context.action.action === 'top_up_wallet' ||
+        context.action.action === 'launch_ads' ||
         context.action.action === 'disable_ads' ||
         context.action.action === 'withdraw') &&
       !(Number.isInteger(context.action.amount) && context.action.amount > 0)
@@ -301,11 +322,19 @@ export class ProfileActionsOrchestratorService {
   }
 
   private shouldAutoStart(context: ActionExecutionContext) {
+    if (!this.requiresBrowserSession(context)) {
+      return context.runtimeSnapshot.status !== ProfileLifecycleStatus.STARTED;
+    }
+
     return (
       context.runtimeSnapshot.status !== ProfileLifecycleStatus.STARTED ||
       !context.runtimeSnapshot.debugPort ||
       !context.runtimeSnapshot.websocketLink
     );
+  }
+
+  private requiresBrowserSession(context: ActionExecutionContext) {
+    return context.action.action !== 'disable_ads';
   }
 
   private async waitForBrowserReady(context: ActionExecutionContext) {

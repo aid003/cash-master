@@ -43,11 +43,21 @@ export type RefundActionPayload = BaseActionPayload & {
   currency: 'RUB';
 };
 
-export type BasicActionPayload = BaseActionPayload & {
-  action: Exclude<ProfileActionType, 'disable_ads' | 'withdraw' | 'top_up_wallet'>;
+export type LaunchAdsPayload = BaseActionPayload & {
+  action: 'launch_ads';
+  amount: number;
+  currency: 'RUB';
 };
 
-export type AvitoActionPayload = BasicActionPayload | RefundActionPayload | TopUpWalletPayload;
+export type BasicActionPayload = BaseActionPayload & {
+  action: Exclude<ProfileActionType, 'disable_ads' | 'withdraw' | 'launch_ads' | 'top_up_wallet'>;
+};
+
+export type AvitoActionPayload =
+  | BasicActionPayload
+  | RefundActionPayload
+  | LaunchAdsPayload
+  | TopUpWalletPayload;
 
 export type ActionExecutionProfile = UndetectableProfile & {
   project: Pick<Project, 'id' | 'name' | 'status'> | null;
